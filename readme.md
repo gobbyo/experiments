@@ -12,10 +12,6 @@ This index links to each top-level folder and gives a brief description of the c
 | [dht](dht/) | DHT sensor test scripts (temperature/humidity). |
 | [halleffect](halleffect/) | Hall-effect sensor demos and async display examples. |
 | [hotspotserverAdmin](hotspotserverAdmin/) | Pico W hotspot/admin server app with Microdot web server, UI, and config. |
-| [html](html/) | Static HTML pages used by the hotspot admin web UI. |
-| [json](json/) | Sample JSON files (placeholders and data). |
-| [microdot](microdot/) | Embedded micro web framework used by the hotspot server (server, helpers, templates). |
-| [schedules](schedules/) | Example schedule JSON files for automated tasks. |
 | [i2c](i2c/) | I2C example (slave) code. |
 | [infrared](infrared/) | Infrared/IR receiver and display test scripts. |
 | [machinetemp](machinetemp/) | Machine temperature measurement example. |
