@@ -1,33 +1,60 @@
 from machine import Pin, PWM
 import uasyncio as asyncio
 
-# Driver module for controlling two motors with PWM speed control using L293x Quadruple Half-H Drivers
+# Driver module for controlling motors with PWM speed control
+# Supports both L293x (dual motor) and L9110 (single motor) drivers
 # Provides `motorDriver` class and helper functions to create and test motors.
 # Designed for use with MicroPython on microcontrollers.
 
 # System constants
 LED_PWM_FREQUENCY = 100  # Hz
 MOTOR_PWM_FREQUENCY = 50  # Hz
-# Default speed PWM pins (can be overridden by importing module)
-SPEED1_PIN = 16  # primary speed pin for motor 1
-SPEED2_PIN = 17  # default speed pin for motor 2 (adjust for your board)
 
-# Motor tuples (CCW pin, CW pin)
-motor1 = (12, 13)
-motor2 = (14, 15)
-motor_pins = [motor1, motor2]
+# ========== CONFIGURATION ==========
+# Select driver type: 'L293x' for dual motors or 'L9110' for single motor
+DRIVER_TYPE = 'L9110'  # Change to 'L9110' for single motor configuration
+
+# L293x Configuration (Dual Motor)
+if DRIVER_TYPE == 'L293x':
+    # Default speed PWM pins (can be overridden by importing module)
+    SPEED1_PIN = 20  # primary speed pin for motor 1
+    SPEED2_PIN = 21  # default speed pin for motor 2
+    
+    # Motor tuples (CCW pin, CW pin)
+    motor1 = (16, 17)
+    motor2 = (18, 19)
+    motor_pins = [motor1, motor2]
+
+# L9110 Configuration (Single Motor)
+elif DRIVER_TYPE == 'L9110':
+    # L9110 pins for single motor
+    # Motor tuples (CCW pin, CW pin)
+    motor1 = (17, 16)
+    motor_pins = [motor1]
 
 
-def create_motors(speed1=SPEED1_PIN, speed2=SPEED2_PIN):
-    """Create two `motorDriver` instances from the configured `motor_pins`.
-
-    Returns (m1, m2).
+def create_motors(speed1=None, speed2=None):
+    """Create `motorDriver` instance(s) based on configured driver type.
+    
+    For L293x: Returns (m1, m2) - two motor instances
+    For L9110: Returns m1 - single motor instance
     """
-    ccw1, cw1 = motor_pins[0]
-    ccw2, cw2 = motor_pins[1]
-    m1 = motorDriver(speed1, cw1, ccw1)
-    m2 = motorDriver(speed2, cw2, ccw2)
-    return m1, m2
+    if DRIVER_TYPE == 'L293x':
+        if speed1 is None:
+            speed1 = SPEED1_PIN
+        if speed2 is None:
+            speed2 = SPEED2_PIN
+        
+        ccw1, cw1 = motor_pins[0]
+        ccw2, cw2 = motor_pins[1]
+        m1 = motorDriver(speed1, cw1, ccw1)
+        m2 = motorDriver(speed2, cw2, ccw2)
+        return m1, m2
+    
+    elif DRIVER_TYPE == 'L9110':
+        ccw, cw = motor_pins[0]
+        m1 = motorDriver(speed1, cw, ccw)
+        return m1
 
 
 async def run_motor(motor, pause_ms=200, ramp_kwargs=None):
@@ -41,25 +68,40 @@ async def run_motor(motor, pause_ms=200, ramp_kwargs=None):
 
 
 def test_motors():
-    """Simplified test: run each motor (ramp CW then CCW) concurrently."""
+    """Test: run motor(s) based on driver type."""
     ramp_kwargs = {'steps': 40, 'step_ms': 50, 'max_pct': 100}
 
     async def _runner():
-        m1, m2 = create_motors()
-        t1 = asyncio.create_task(run_motor(m1, ramp_kwargs=ramp_kwargs))
-        t2 = asyncio.create_task(run_motor(m2, ramp_kwargs=ramp_kwargs))
-        await asyncio.gather(t1, t2)
-        m1.stop()
-        m2.stop()
+        if DRIVER_TYPE == 'L293x':
+            m1, m2 = create_motors()
+            t1 = asyncio.create_task(run_motor(m1, ramp_kwargs=ramp_kwargs))
+            t2 = asyncio.create_task(run_motor(m2, ramp_kwargs=ramp_kwargs))
+            await asyncio.gather(t1, t2)
+            m1.stop()
+            m2.stop()
+        
+        elif DRIVER_TYPE == 'L9110':
+            m1 = create_motors()
+            t1 = asyncio.create_task(run_motor(m1, ramp_kwargs=ramp_kwargs))
+            await asyncio.gather(t1)
+            m1.stop()
 
     try:
         asyncio.run(_runner())
     finally:
         pass
 
+
 class motorDriver:
     def __init__(self, speedPin, cwPin, ccwPin):
-        self.speed = PWM(Pin(speedPin))
+        # For L9110, speedPin can be None - use cwPin for PWM control
+        # For L293x, speedPin is required
+        if speedPin is not None:
+            self.speed = PWM(Pin(speedPin))
+        else:
+            # Use cwPin for PWM control (L9110 mode)
+            self.speed = PWM(Pin(cwPin))
+        
         self.speed.freq(MOTOR_PWM_FREQUENCY)
         self.cw = Pin(cwPin, Pin.OUT)
         self.ccw = Pin(ccwPin, Pin.OUT)
@@ -126,6 +168,7 @@ class motorDriver:
         self.speed.duty_u16(0)
         self.cw.off()
         self.ccw.off()
+
 
 if __name__ == '__main__':
     try:
