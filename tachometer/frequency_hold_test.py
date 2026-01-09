@@ -14,11 +14,11 @@ import ir_display_async
 # Configuration
 MOSFET_GATE_PIN = 17      # GPIO pin connected to MOSFET gate
 PWM_FREQUENCY = 60        # Hz
-TARGET_FREQUENCY = 53     # Hz - Change this to set target motor speed
-HOLD_TIME_MS = 1000 * 30  # How long to hold at target frequency (10 seconds)
+TARGET_FREQUENCY = 50     # Hz - Change this to set target motor speed
+HOLD_TIME_MS = 1000 * 60  # How long to hold at target frequency (10 seconds)
 RAMP_STEP = 1             # Increase/decrease PWM by 1% per step
 STEP_DELAY_MS = 200       # Delay between steps in milliseconds
-FREQUENCY_TOLERANCE = 3   # Hz - How close to target before holding
+FREQUENCY_TOLERANCE = 1   # Hz - How close to target before holding
 
 
 async def frequency_monitor(sensor, stop_event):
@@ -208,8 +208,8 @@ async def ramp_to_target_from_calibration(motor_pwm, sensor, max_freq_hz, target
 
 async def hold_frequency(motor_pwm, sensor, hold_pwm_pct, target_hz, hold_ms=HOLD_TIME_MS):
     """
-    Hold motor at target frequency using gentle feedback control.
-    Uses slow, small adjustments to compensate for motor drift without oscillating.
+    Hold motor at target frequency using proportional feedback control.
+    Uses gentle adjustments to compensate for motor drift without oscillating.
     
     Args:
         motor_pwm: PWM instance for motor control
@@ -222,74 +222,88 @@ async def hold_frequency(motor_pwm, sensor, hold_pwm_pct, target_hz, hold_ms=HOL
         Final adjusted PWM percentage
     """
     print(f"\nHolding at target {target_hz}Hz for {hold_ms/1000:.1f} seconds (starting PWM: {hold_pwm_pct}%)...")
-    print(f"Using gentle feedback control to compensate for motor drift.")
+    print(f"Using proportional feedback control to maintain stability.")
     print()
     
     elapsed = 0
-    current_pwm = hold_pwm_pct
-    adjustment_interval = 2000  # Only adjust every 2 seconds
+    current_pwm = float(hold_pwm_pct)
+    adjustment_interval = 500  # Adjust every 500ms for responsive control
     last_adjustment = -adjustment_interval  # Allow immediate first adjustment
     freq_readings = []
+    error_history = []
     
-    # Very conservative deadband
-    deadband = 2
+    # Calculate 2% tolerance in Hz (2% of target)
+    tolerance_hz = (target_hz * 2) / 100  # 1Hz for 50Hz target
     
     while elapsed < hold_ms:
         freq = sensor.get_frequency()
         ir_display_async.current_value = int(freq)
         freq_readings.append(freq)
         
-        # Only adjust at long intervals to let motor stabilize
-        if elapsed - last_adjustment >= adjustment_interval:
-            error = target_hz - freq
-            
-            # Only adjust if outside deadband
-            if abs(error) > deadband:
-                # Very small, proportional adjustments
-                if error > 15:
-                    # Way too slow: +2%
-                    adjustment = 2
-                elif error > 8:
-                    # Too slow: +1%
-                    adjustment = 1
-                elif error < -15:
-                    # Way too fast: -2%
-                    adjustment = -2
-                elif error < -8:
-                    # Too fast: -1%
-                    adjustment = -1
-                else:
-                    # Small error outside deadband: no adjustment yet
-                    adjustment = 0
-                
-                if adjustment != 0:
-                    old_pwm = current_pwm
-                    current_pwm = max(1, min(100, current_pwm + adjustment))
-                    motor_pwm.duty_u16(int((current_pwm / 100) * 65535))
-                    print(f"  [Adjust] Error {error:+.0f}Hz -> PWM {old_pwm}% -> {current_pwm}% ({adjustment:+d}%)")
-                
-                last_adjustment = elapsed
+        # Calculate error (positive when too slow, negative when too fast)
+        error = target_hz - freq
+        error_history.append(error)
         
-        # Print status every second
+        # Adjust more frequently for better stability
+        if elapsed - last_adjustment >= adjustment_interval:
+            # Use proportional control: adjust based on error magnitude
+            # Small adjustments for small errors, larger for large errors
+            
+            if abs(error) > tolerance_hz * 3:
+                # Large error (>3Hz): more aggressive
+                adjustment = 0.5 * (error / 10)  # 0.5% per Hz
+            elif abs(error) > tolerance_hz:
+                # Medium error (1-3Hz): moderate correction
+                adjustment = 0.25 * (error / 10)  # 0.25% per Hz
+            else:
+                # Small error (<1Hz): minimal adjustment
+                adjustment = 0.1 * (error / 10)  # 0.1% per Hz
+            
+            # Apply damping to prevent oscillation when error changes sign
+            if len(error_history) >= 2:
+                prev_error = error_history[-2]
+                if (error > 0 and prev_error < 0) or (error < 0 and prev_error > 0):
+                    # Error changed sign: reduce adjustment strength by 25%
+                    adjustment *= 0.75
+            
+            # Apply adjustment with bounds checking
+            new_pwm = current_pwm + adjustment
+            new_pwm = max(1, min(100, new_pwm))
+            
+            # Only print and apply if adjustment is significant (> 0.1%)
+            if abs(new_pwm - current_pwm) > 0.1:
+                old_pwm = current_pwm
+                current_pwm = new_pwm
+                motor_pwm.duty_u16(int((current_pwm / 100) * 65535))
+                print(f"  [Adjust] Error {error:+5.1f}Hz -> PWM {old_pwm:5.1f}% -> {current_pwm:5.1f}% ({adjustment:+.2f}%)")
+            
+            last_adjustment = elapsed
+        
+        # Print status every 1 second
         if elapsed % 1000 == 0:
             remaining = (hold_ms - elapsed) / 1000
-            error = target_hz - freq
-            status = "✓" if abs(error) <= deadband else "~"
-            print(f"  {status} {int(freq):3d}Hz @ PWM {current_pwm:3d}% (target: {target_hz}Hz, error: {error:+.0f}Hz, {remaining:.1f}s remaining)")
+            status = "✓" if abs(error) <= tolerance_hz else "~"
+            print(f"  {status}  {int(freq):3d}Hz @ PWM {current_pwm:5.1f}% (target: {target_hz}Hz, error: {error:+5.1f}Hz, {remaining:.1f}s remaining)")
         
-        await asyncio.sleep_ms(200)
-        elapsed += 200
+        await asyncio.sleep_ms(100)
+        elapsed += 100
     
     # Print summary statistics
     if freq_readings:
         avg_freq = sum(freq_readings) / len(freq_readings)
         min_freq = min(freq_readings)
         max_freq = max(freq_readings)
+        
+        # Count how many readings were within tolerance
+        good_readings = sum(1 for f in freq_readings if abs(f - target_hz) <= tolerance_hz)
+        success_pct = (good_readings / len(freq_readings)) * 100
+        
         print()
         print(f"Hold phase summary:")
         print(f"  Average: {int(avg_freq)}Hz (target: {target_hz}Hz, error: {int(avg_freq - target_hz):+d}Hz)")
         print(f"  Range: {int(min_freq)}-{int(max_freq)}Hz (±{int((max_freq - min_freq) / 2)}Hz)")
-        print(f"  Final PWM: {current_pwm}% (started at {hold_pwm_pct}%)")
+        print(f"  Within 2% tolerance: {success_pct:.1f}% ({good_readings}/{len(freq_readings)} readings)")
+        print(f"  Final PWM: {current_pwm:.1f}% (started at {hold_pwm_pct}%)")
     
     return current_pwm
 
