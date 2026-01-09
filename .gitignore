@@ -1,0 +1,39 @@
+### Python cache/artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+
+### Build outputs
+build/
+dist/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+
+### Virtual environments
+.venv/
+venv/
+ENV/
+
+### Testing and tooling
+.pytest_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+.cache/
+
+### Editor/IDE
+.vscode/
+.idea/
+
+### Logs
+*.log
+
+### MicroPython
+*.mpy
+.micropython/
+.mip/
+
+### Local secrets/config
+secrets.py
