@@ -2,18 +2,6 @@ from machine import Pin
 import uasyncio as asyncio
 import time
 
-# Global variables to track IR sensor state
-detection_count = 0
-last_trigger_time = 0
-frequency_hz = 0.0
-last_revolution_time = 0
-previous_avg_hz = 0.0
-
-# Configuration
-SLOTS_PER_REVOLUTION = 5  # Number of slots in the encoder disc
-slot_times = []  # Store timestamps of slot detections
-frequency_readings = []  # Store last 60 frequency readings for averaging
-
 # Two-digit display configuration
 #   2 digit 7 segmented LED
 #
@@ -45,6 +33,100 @@ pins = [Pin(pin_number[0], Pin.OUT), Pin(pin_number[1], Pin.OUT), Pin(pin_number
 
 # Global variable to hold the current display value
 current_value = 0
+
+
+class IRSensor:
+    """Class to manage IR sensor initialization and frequency tracking."""
+    
+    def __init__(self, gpio_pin=26, slots_per_revolution=5):
+        """
+        Initialize the IR sensor.
+        
+        Args:
+            gpio_pin: GPIO pin number for the IR sensor (default 26)
+            slots_per_revolution: Number of slots in the encoder disc (default 5)
+        """
+        self.gpio_pin = gpio_pin
+        self.slots_per_revolution = slots_per_revolution
+        
+        # State tracking
+        self.detection_count = 0
+        self.last_trigger_time = 0
+        self.frequency_hz = 0.0
+        self.last_revolution_time = 0
+        self.previous_avg_hz = 0.0
+        
+        # Data buffers
+        self.slot_times = []
+        self.frequency_readings = []
+        
+        # Setup the pin and interrupt
+        self.ir_sensor = Pin(self.gpio_pin, Pin.IN)
+        self.ir_sensor.irq(trigger=Pin.IRQ_FALLING, handler=self._interrupt_handler)
+        
+        print(f"IR sensor initialized on GPIO{self.gpio_pin}")
+        print(f"Configuration: {self.slots_per_revolution} slots per revolution")
+    
+    def _interrupt_handler(self, pin):
+        """Handle IR sensor interrupt on falling edge."""
+        current_time = time.ticks_ms()
+        
+        self.last_trigger_time = current_time
+        self.detection_count += 1
+        self.slot_times.append(current_time)
+        
+        # Keep only last 15 slot times (3 full revolutions)
+        if len(self.slot_times) > 15:
+            self.slot_times.pop(0)
+        
+        # Calculate frequency after each complete revolution
+        if self.detection_count % self.slots_per_revolution == 0:
+            if len(self.slot_times) > self.slots_per_revolution:
+                time_for_rev = time.ticks_diff(current_time, self.slot_times[-(self.slots_per_revolution + 1)])
+                
+                if time_for_rev > 0:
+                    # Hz = (1 revolution / time_in_ms) * 1000
+                    instant_hz = 1000.0 / time_for_rev
+                    self.frequency_readings.append(instant_hz)
+                    
+                    # Keep only last 40 readings for stable display
+                    if len(self.frequency_readings) > 40:
+                        self.frequency_readings.pop(0)
+                    
+                    # Calculate average frequency
+                    avg_hz = sum(self.frequency_readings) / len(self.frequency_readings)
+                    self.frequency_hz = round(avg_hz)
+                    
+                    # Only print if the average has changed
+                    if self.frequency_hz != self.previous_avg_hz:
+                        self.previous_avg_hz = self.frequency_hz
+            
+            self.last_revolution_time = current_time
+    
+    def get_frequency(self):
+        """Get the current measured frequency in Hz."""
+        return self.frequency_hz
+    
+    def reset(self):
+        """Reset all frequency data."""
+        self.detection_count = 0
+        self.frequency_hz = 0.0
+        self.previous_avg_hz = 0.0
+        self.slot_times = []
+        self.frequency_readings = []
+
+
+# Global variables to track IR sensor state (for backward compatibility)
+detection_count = 0
+last_trigger_time = 0
+frequency_hz = 0.0
+last_revolution_time = 0
+previous_avg_hz = 0.0
+
+# Configuration
+SLOTS_PER_REVOLUTION = 5  # Number of slots in the encoder disc
+slot_times = []  # Store timestamps of slot detections
+frequency_readings = []  # Store last 60 frequency readings for averaging
 
 
 # Interrupt handler function
@@ -93,47 +175,59 @@ def ir_interrupt_handler(pin):
 async def display_task():
     """Continuously multiplex the two digits asynchronously."""
     global current_value
-    
-    while True:
-        # Convert value to two digits (0-99)
-        value = current_value % 100
-        digit1 = value // 10
-        digit2 = value % 10
-        
-        # Display digit 1 (tens place)
-        if digit1 > 0 or value >= 10:  # Don't show leading zero
-            # Clear all segments first
+    try:
+        while True:
+            # Convert value to two digits (0-99)
+            value = current_value % 100
+            digit1 = value // 10
+            digit2 = value % 10
+
+            # Display digit 1 (tens place)
+            if digit1 > 0 or value >= 10:  # Don't show leading zero
+                # Clear all segments first
+                for pin in pins:
+                    pin.value(0)
+
+                digits[1].value(0)
+                i = 0
+                for pin in pins:
+                    pin.value((segnum[digit1] & (0x01 << i)) >> i)
+                    i += 1
+                await asyncio.sleep_ms(5)
+                digits[1].value(1)
+            else:
+                digits[1].value(1)
+
+            # Blanking period to prevent ghosting
             for pin in pins:
                 pin.value(0)
-            
-            digits[1].value(0)
+            await asyncio.sleep_ms(1)
+
+            # Display digit 2 (ones place)
+            digits[0].value(0)
             i = 0
             for pin in pins:
-                pin.value((segnum[digit1] & (0x01 << i)) >> i)
+                pin.value((segnum[digit2] & (0x01 << i)) >> i)
                 i += 1
             await asyncio.sleep_ms(5)
+            digits[0].value(1)
+
+            # Blanking period to prevent ghosting
+            for pin in pins:
+                pin.value(0)
+            await asyncio.sleep_ms(1)
+    finally:
+        # Ensure display is blank when the task is cancelled or program exits
+        try:
+            for pin in pins:
+                pin.value(0)
+        except Exception:
+            pass
+        try:
+            digits[0].value(1)
             digits[1].value(1)
-        else:
-            digits[1].value(1)
-        
-        # Blanking period to prevent ghosting
-        for pin in pins:
-            pin.value(0)
-        await asyncio.sleep_ms(1)
-        
-        # Display digit 2 (ones place)
-        digits[0].value(0)
-        i = 0
-        for pin in pins:
-            pin.value((segnum[digit2] & (0x01 << i)) >> i)
-            i += 1
-        await asyncio.sleep_ms(5)
-        digits[0].value(1)
-        
-        # Blanking period to prevent ghosting
-        for pin in pins:
-            pin.value(0)
-        await asyncio.sleep_ms(1)
+        except Exception:
+            pass
 
 
 async def monitor_task():

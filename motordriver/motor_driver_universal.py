@@ -7,8 +7,7 @@ import uasyncio as asyncio
 # Designed for use with MicroPython on microcontrollers.
 
 # System constants
-LED_PWM_FREQUENCY = 100  # Hz
-MOTOR_PWM_FREQUENCY = 50  # Hz
+MOTOR_PWM_FREQUENCY = 20  # Hz (lowered from 50Hz for better low-speed control)
 
 # ========== CONFIGURATION ==========
 # Select driver type: 'L293x' for dual motors or 'L9110' for single motor
@@ -69,7 +68,7 @@ async def run_motor(motor, pause_ms=200, ramp_kwargs=None):
 
 def test_motors():
     """Test: run motor(s) based on driver type."""
-    ramp_kwargs = {'steps': 40, 'step_ms': 50, 'max_pct': 100}
+    ramp_kwargs = {'steps': 40, 'step_ms': 50, 'max_pct': 1}
 
     async def _runner():
         if DRIVER_TYPE == 'L293x':
@@ -96,21 +95,41 @@ class motorDriver:
     def __init__(self, speedPin, cwPin, ccwPin):
         # For L9110, speedPin can be None - use cwPin for PWM control
         # For L293x, speedPin is required
-        if speedPin is not None:
-            self.speed = PWM(Pin(speedPin))
-        else:
-            # Use cwPin for PWM control (L9110 mode)
-            self.speed = PWM(Pin(cwPin))
-        
+        # remember pins
+        self._speed_pin = speedPin if speedPin is not None else cwPin
+        self._cw_pin = cwPin
+        self._ccw_pin = ccwPin
+
+        # create PWM on the speed pin
+        self.speed = PWM(Pin(self._speed_pin))
         self.speed.freq(MOTOR_PWM_FREQUENCY)
+
+        # create direction pins
         self.cw = Pin(cwPin, Pin.OUT)
         self.ccw = Pin(ccwPin, Pin.OUT)
+
+        # track current speed percentage
+        self._current_pct = 0.0
+
+        # ensure motors start stopped
         self.stop()
+
+    def set_speed(self, pct):
+        """Set motor speed as percentage (0-100)."""
+        try:
+            self.speed.duty_u16(int((pct / 100) * 65535))
+            # remember current percent
+            try:
+                self._current_pct = float(pct)
+            except Exception:
+                self._current_pct = 0.0
+        except Exception:
+            pass
 
     async def clockwise(self, motor_speed, waitTime):
         """Run motor clockwise at `motor_speed` (%) for `waitTime` seconds (async)."""
         try:
-            self.speed.duty_u16(int((motor_speed / 100) * 65535))
+            self.set_speed(motor_speed)
             self.ccw.off()
             self.cw.on()
             await asyncio.sleep(waitTime)
@@ -122,7 +141,7 @@ class motorDriver:
     async def counterclockwise(self, motor_speed, waitTime):
         """Run motor counter-clockwise at `motor_speed` (%) for `waitTime` seconds (async)."""
         try:
-            self.speed.duty_u16(int((motor_speed / 100) * 65535))
+            self.set_speed(motor_speed)
             self.cw.off()
             self.ccw.on()
             await asyncio.sleep(waitTime)
@@ -150,13 +169,13 @@ class motorDriver:
             # ramp up
             for i in range(steps + 1):
                 pct = (i / steps) * max_pct
-                self.speed.duty_u16(int((pct / 100) * 65535))
+                self.set_speed(pct)
                 await asyncio.sleep_ms(step_ms)
 
             # ramp down
             for i in range(steps, -1, -1):
                 pct = (i / steps) * max_pct
-                self.speed.duty_u16(int((pct / 100) * 65535))
+                self.set_speed(pct)
                 await asyncio.sleep_ms(step_ms)
 
         except Exception as e:
@@ -165,9 +184,25 @@ class motorDriver:
             self.stop()
 
     def stop(self):
-        self.speed.duty_u16(0)
-        self.cw.off()
-        self.ccw.off()
+        # set duty to zero; keep PWM object alive so it can be reused
+        try:
+            self.speed.duty_u16(0)
+            try:
+                self._current_pct = 0.0
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+        # force direction pins low
+        try:
+            self.cw.off()
+        except Exception:
+            pass
+        try:
+            self.ccw.off()
+        except Exception:
+            pass
 
 
 if __name__ == '__main__':
