@@ -7,10 +7,8 @@ Displays motor frequency (RPM) measured by IR sensor.
 
 from machine import Pin, PWM
 import uasyncio as asyncio
-import sys
-import os
-from ir_display_async import IRSensor, display_task
-import ir_display_async
+import display_3461AS_async as sevenseg
+from ir_display_async import IRSensor
 
 # Configuration
 MOSFET_GATE_PIN = 17  # GPIO pin connected to MOSFET gate
@@ -19,7 +17,7 @@ RAMP_STEP = 1         # Increase/decrease PWM by 1% per step
 STEP_DELAY_MS = 200   # Delay between steps in milliseconds (increased for measurements)
 
 
-async def display_frequency_monitor(sensor, stop_event):
+async def display_frequency_monitor(sensor, display, stop_event):
     """
     Background task that continuously updates display with frequency readings.
     Runs until stop_event is set.
@@ -31,8 +29,7 @@ async def display_frequency_monitor(sensor, stop_event):
     try:
         while not stop_event.is_set():
             freq = sensor.get_frequency()
-            # Update the global current_value so display_task can show it
-            ir_display_async.current_value = int(freq)
+            display.set_number(int(freq))
             await asyncio.sleep_ms(500)
     except asyncio.CancelledError:
         pass
@@ -54,12 +51,13 @@ async def ramp_motor_with_tachometer(sensor):
     print(f"IR Tachometer: ENABLED (GPIO 26)")
     print()
     
+    # Initialize 4-digit display
+    display = sevenseg.AsyncDisplay3461AS()
+    display.start()
+
     # Create event to control monitoring task
     stop_monitoring = asyncio.Event()
-    monitor_task = asyncio.create_task(display_frequency_monitor(sensor, stop_monitoring))
-    
-    # Start the display task to show frequency on 7-segment display
-    display_task_handle = asyncio.create_task(display_task())
+    monitor_task = asyncio.create_task(display_frequency_monitor(sensor, display, stop_monitoring))
     
     # Data collection for analysis
     ramp_data = {
@@ -160,14 +158,15 @@ async def ramp_motor_with_tachometer(sensor):
         # Stop monitoring
         stop_monitoring.set()
         monitor_task.cancel()
-        display_task_handle.cancel()
         try:
             await monitor_task
         except asyncio.CancelledError:
             pass
+
+        # Stop display
         try:
-            await display_task_handle
-        except asyncio.CancelledError:
+            await display.stop()
+        except Exception:
             pass
         
         # Ensure motor is stopped
@@ -181,7 +180,7 @@ async def main():
     try:
         # Initialize IR sensor
         print("Initializing IR sensor tachometer...")
-        sensor = IRSensor(gpio_pin=26, slots_per_revolution=5)
+        sensor = IRSensor(gpio_pin=26, slots_per_revolution=1)
         await asyncio.sleep_ms(500)
         print()
         

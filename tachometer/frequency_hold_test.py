@@ -7,9 +7,8 @@ Includes real-time feedback via IR sensor tachometer.
 from machine import Pin, PWM
 import uasyncio as asyncio
 import sys
-import os
-from ir_display_async import IRSensor, display_task
-import ir_display_async
+from ir_display_async import IRSensor
+import display_3461AS_async as sevenseg
 
 # Configuration
 MOSFET_GATE_PIN = 17      # GPIO pin connected to MOSFET gate
@@ -19,6 +18,11 @@ HOLD_TIME_MS = 1000 * 60  # How long to hold at target frequency (10 seconds)
 RAMP_STEP = 1             # Increase/decrease PWM by 1% per step
 STEP_DELAY_MS = 200       # Delay between steps in milliseconds
 FREQUENCY_TOLERANCE = 1   # Hz - How close to target before holding
+SLOTS_PER_REV = 1         # Number of reflective slots on the encoder disk
+
+# Globals
+display = None
+sensor = None
 
 
 async def frequency_monitor(sensor, stop_event):
@@ -32,7 +36,8 @@ async def frequency_monitor(sensor, stop_event):
     try:
         while not stop_event.is_set():
             freq = sensor.get_frequency()
-            ir_display_async.current_value = int(freq)
+            if display:
+                display.set_number(int(freq))
             await asyncio.sleep_ms(300)
     except asyncio.CancelledError:
         pass
@@ -67,7 +72,8 @@ async def calibrate_motor(motor_pwm, sensor):
     print("Collecting frequency readings at 100% PWM:")
     for i in range(10):
         freq = sensor.get_frequency()
-        ir_display_async.current_value = int(freq)
+        if display:
+            display.set_number(int(freq))
         readings.append(freq)
         max_freq = max(max_freq, freq)
         print(f"  Reading {i+1}: {int(freq)}Hz")
@@ -120,7 +126,8 @@ async def ramp_to_target(motor_pwm, sensor, target_hz, tolerance_hz=FREQUENCY_TO
         await asyncio.sleep_ms(STEP_DELAY_MS)
         
         freq = sensor.get_frequency()
-        ir_display_async.current_value = int(freq)
+        if display:
+            display.set_number(int(freq))
         
         if iteration % 5 == 0:  # Print every 5 iterations
             print(f"  PWM: {current_pwm:3d}% -> {int(freq):3d}Hz")
@@ -181,7 +188,8 @@ async def ramp_to_target_from_calibration(motor_pwm, sensor, max_freq_hz, target
         await asyncio.sleep_ms(STEP_DELAY_MS)
 
         freq = sensor.get_frequency()
-        ir_display_async.current_value = int(freq)
+        if display:
+            display.set_number(int(freq))
 
         if iteration % 3 == 0:  # Print every 3 iterations
             print(f"  PWM: {current_pwm:3d}% -> {int(freq):3d}Hz")
@@ -227,17 +235,18 @@ async def hold_frequency(motor_pwm, sensor, hold_pwm_pct, target_hz, hold_ms=HOL
     
     elapsed = 0
     current_pwm = float(hold_pwm_pct)
-    adjustment_interval = 500  # Adjust every 500ms for responsive control
+    adjustment_interval = 200  # Adjust every 200ms for tighter control
     last_adjustment = -adjustment_interval  # Allow immediate first adjustment
     freq_readings = []
     error_history = []
     
-    # Calculate 2% tolerance in Hz (2% of target)
-    tolerance_hz = (target_hz * 2) / 100  # 1Hz for 50Hz target
+    # Calculate 1% tolerance in Hz (tighter tracking)
+    tolerance_hz = (target_hz * 1) / 100
     
     while elapsed < hold_ms:
         freq = sensor.get_frequency()
-        ir_display_async.current_value = int(freq)
+        if display:
+            display.set_number(int(freq))
         freq_readings.append(freq)
         
         # Calculate error (positive when too slow, negative when too fast)
@@ -250,14 +259,14 @@ async def hold_frequency(motor_pwm, sensor, hold_pwm_pct, target_hz, hold_ms=HOL
             # Small adjustments for small errors, larger for large errors
             
             if abs(error) > tolerance_hz * 3:
-                # Large error (>3Hz): more aggressive
-                adjustment = 0.5 * (error / 10)  # 0.5% per Hz
+                # Large error (>~3% of target): more aggressive
+                adjustment = 0.7 * (error / 10)  # 0.7% per Hz
             elif abs(error) > tolerance_hz:
-                # Medium error (1-3Hz): moderate correction
-                adjustment = 0.25 * (error / 10)  # 0.25% per Hz
+                # Medium error (>~1% of target): moderate correction
+                adjustment = 0.35 * (error / 10)  # 0.35% per Hz
             else:
-                # Small error (<1Hz): minimal adjustment
-                adjustment = 0.1 * (error / 10)  # 0.1% per Hz
+                # Small error (<~1% of target): minimal adjustment
+                adjustment = 0.15 * (error / 10)  # 0.15% per Hz
             
             # Apply damping to prevent oscillation when error changes sign
             if len(error_history) >= 2:
@@ -328,7 +337,8 @@ async def ramp_down(motor_pwm, sensor, current_pwm, target_pwm):
         await asyncio.sleep_ms(STEP_DELAY_MS)
         
         freq = sensor.get_frequency()
-        ir_display_async.current_value = int(freq)
+        if display:
+            display.set_number(int(freq))
         
         if pwm_step % 10 == 0:
             status = "↓" if pwm_step > 0 else "◼"
@@ -355,15 +365,18 @@ async def run_frequency_hold_test(target_hz=TARGET_FREQUENCY):
     print(f"Hold Duration: {HOLD_TIME_MS/1000:.1f} seconds")
     print(f"PWM Frequency: {PWM_FREQUENCY}Hz")
     print(f"MOSFET Gate Pin: GPIO{MOSFET_GATE_PIN}")
+    print(f"Encoder Slots/Rev: {SLOTS_PER_REV} (target {target_hz}Hz)")
     print(f"=" * 50)
     print()
+
+    # Initialize 4-digit display
+    global display
+    display = sevenseg.AsyncDisplay3461AS()
+    display.start()
     
     # Create event to control monitoring task
     stop_monitoring = asyncio.Event()
     monitor_task = asyncio.create_task(frequency_monitor(sensor, stop_monitoring))
-    
-    # Start the display task to show frequency on 7-segment display
-    display_task_handle = asyncio.create_task(display_task())
     
     try:
         # PHASE 0: Calibrate at 100% to determine max Hz
@@ -402,14 +415,18 @@ async def run_frequency_hold_test(target_hz=TARGET_FREQUENCY):
         stop_monitoring.set()
         motor_pwm.duty_u16(0)
         motor_pwm.deinit()
-        
-        monitor_task.cancel()
-        display_task_handle.cancel()
+
         try:
             await monitor_task
-            await display_task_handle
         except asyncio.CancelledError:
             pass
+
+        if display:
+            try:
+                await display.stop()
+            except Exception:
+                pass
+            display = None
         
         print("Motor stopped and PWM disabled.")
 
@@ -420,7 +437,8 @@ async def main():
         # Initialize IR sensor
         print("Initializing IR sensor tachometer...")
         global sensor
-        sensor = IRSensor(gpio_pin=26, slots_per_revolution=5)
+        sensor = IRSensor(gpio_pin=26, slots_per_revolution=SLOTS_PER_REV)
+        print(f"Slots per revolution: {SLOTS_PER_REV}")
         await asyncio.sleep_ms(500)
         print()
         
