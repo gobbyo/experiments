@@ -37,83 +37,76 @@ current_value = 0
 
 class IRSensor:
     """Class to manage IR sensor initialization and frequency tracking."""
-    
+
     def __init__(self, gpio_pin=26, slots_per_revolution=5):
         """
         Initialize the IR sensor.
-        
+
         Args:
             gpio_pin: GPIO pin number for the IR sensor (default 26)
             slots_per_revolution: Number of slots in the encoder disc (default 5)
         """
         self.gpio_pin = gpio_pin
-        self.slots_per_revolution = slots_per_revolution
-        
-        # State tracking
-        self.detection_count = 0
-        self.last_trigger_time = 0
+        self.slots_per_revolution = max(1, slots_per_revolution)
+
+        # State tracking (lightweight for higher RPMs)
         self.frequency_hz = 0.0
-        self.last_revolution_time = 0
-        self.previous_avg_hz = 0.0
-        
-        # Data buffers
-        self.slot_times = []
-        self.frequency_readings = []
-        
+        self._last_ts_us = None
+        self._alpha_up = 0.18   # smoothing when frequency increasing
+        self._alpha_down = 0.45 # faster decay when frequency decreasing
+        self._max_jump_ratio = 1.2  # tighter clamp on spikes
+        self._min_dt_us = 900       # ignore pulses faster than this (~1.1 kHz)
+        self._inst_buf = []         # small buffer for median filtering
+
         # Setup the pin and interrupt
         self.ir_sensor = Pin(self.gpio_pin, Pin.IN)
         self.ir_sensor.irq(trigger=Pin.IRQ_FALLING, handler=self._interrupt_handler)
-        
+
         print(f"IR sensor initialized on GPIO{self.gpio_pin}")
         print(f"Configuration: {self.slots_per_revolution} slots per revolution")
-    
+
     def _interrupt_handler(self, pin):
-        """Handle IR sensor interrupt on falling edge."""
-        current_time = time.ticks_ms()
-        
-        self.last_trigger_time = current_time
-        self.detection_count += 1
-        self.slot_times.append(current_time)
-        
-        # Keep only last 15 slot times (3 full revolutions)
-        if len(self.slot_times) > 15:
-            self.slot_times.pop(0)
-        
-        # Calculate frequency after each complete revolution
-        if self.detection_count % self.slots_per_revolution == 0:
-            if len(self.slot_times) > self.slots_per_revolution:
-                time_for_rev = time.ticks_diff(current_time, self.slot_times[-(self.slots_per_revolution + 1)])
-                
-                if time_for_rev > 0:
-                    # Hz = (1 revolution / time_in_ms) * 1000
-                    instant_hz = 1000.0 / time_for_rev
-                    self.frequency_readings.append(instant_hz)
-                    
-                    # Keep only last 40 readings for stable display
-                    if len(self.frequency_readings) > 40:
-                        self.frequency_readings.pop(0)
-                    
-                    # Calculate average frequency
-                    avg_hz = sum(self.frequency_readings) / len(self.frequency_readings)
-                    self.frequency_hz = round(avg_hz)
-                    
-                    # Only print if the average has changed
-                    if self.frequency_hz != self.previous_avg_hz:
-                        self.previous_avg_hz = self.frequency_hz
-            
-            self.last_revolution_time = current_time
-    
+        """Handle IR sensor interrupt on falling edge with minimal work."""
+        ts = time.ticks_us()
+
+        if self._last_ts_us is not None:
+            dt = time.ticks_diff(ts, self._last_ts_us)
+            if dt > self._min_dt_us:
+                # Instantaneous frequency in Hz accounting for slots per revolution
+                inst_hz = 1_000_000.0 / dt / self.slots_per_revolution
+
+                # Median filter over last few instant readings to reject outliers
+                self._inst_buf.append(inst_hz)
+                if len(self._inst_buf) > 5:
+                    self._inst_buf.pop(0)
+                buf_sorted = sorted(self._inst_buf)
+                mid = len(buf_sorted)//2
+                if len(buf_sorted) % 2:
+                    median_hz = buf_sorted[mid]
+                else:
+                    median_hz = 0.5 * (buf_sorted[mid-1] + buf_sorted[mid])
+
+                # Guard against impossible spikes relative to current EMA
+                if self.frequency_hz > 0 and median_hz > self.frequency_hz * self._max_jump_ratio:
+                    median_hz = self.frequency_hz * self._max_jump_ratio
+
+                # Exponential moving average to smooth jitter with asymmetric response
+                alpha = self._alpha_up if median_hz >= self.frequency_hz else self._alpha_down
+                if self.frequency_hz == 0.0:
+                    self.frequency_hz = median_hz
+                else:
+                    self.frequency_hz = (1 - alpha) * self.frequency_hz + alpha * median_hz
+
+        self._last_ts_us = ts
+
     def get_frequency(self):
-        """Get the current measured frequency in Hz."""
-        return self.frequency_hz
-    
+        """Get the current measured frequency in Hz (rounded)."""
+        return round(self.frequency_hz)
+
     def reset(self):
         """Reset all frequency data."""
-        self.detection_count = 0
         self.frequency_hz = 0.0
-        self.previous_avg_hz = 0.0
-        self.slot_times = []
-        self.frequency_readings = []
+        self._last_ts_us = None
 
 
 # Global variables to track IR sensor state (for backward compatibility)

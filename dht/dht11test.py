@@ -1,14 +1,15 @@
-from dht import DHT22
+from dht import DHT11
 from machine import Pin
 import time
 
 def main():
-    t = DHT22(Pin(27, Pin.IN, Pin.PULL_UP))
+    # Initialize DHT11 on GPIO 27 (change pin if needed)
+    t = DHT11(Pin(27, Pin.IN, Pin.PULL_UP))
     
     # Wait for sensor to stabilize
     time.sleep(2)
     
-    # Retry logic with 3 attempts
+    # Retry logic for measurement
     max_retries = 3
     for attempt in range(max_retries):
         try:
@@ -26,7 +27,7 @@ def main():
                 print("Retrying in 2 seconds...")
                 time.sleep(2)
             else:
-                print("Failed to read sensor after 3 attempts")
+                print("Failed to read sensor after multiple attempts")
                 print("Check wiring and connections")
 
 # Example usage
