@@ -35,5 +35,3 @@ This index links to each top-level folder and gives a brief description of the c
 | [uart](uart/) | UART send/receive test scripts. | | | |
 | [ultrasound](ultrasound/) | Ultrasonic distance measurement helpers and measurement script. | | ✓ | |
 | [ws2812](ws2812/) | WS2812 addressable LED control library and test scripts. | | | |
-
-If you'd like, I can expand any entry with per-file descriptions or add direct file links for key scripts.
