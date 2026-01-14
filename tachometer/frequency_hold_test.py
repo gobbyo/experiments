@@ -11,7 +11,7 @@ from ir_display_async import IRSensor
 import display_3461AS_async as sevenseg
 
 # Configuration
-MOSFET_GATE_PIN = 17      # GPIO pin connected to MOSFET gate
+MOSFET_GATE_PIN = 16      # GPIO pin connected to MOSFET gate
 PWM_FREQUENCY = 60        # Hz
 TARGET_FREQUENCY = 40     # Hz - Change this to set target motor speed
 HOLD_TIME_MS = 1000 * 60  # How long to hold at target frequency (10 seconds)

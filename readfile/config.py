@@ -37,7 +37,7 @@ class Config():
 
 #Example usage:
 def main():
-    filename = input("Enter filename: ")
+    filename = "config.json"
     conf = Config(filename)
     conf.write("A", 123)
     conf.write("B", 0.123)

@@ -1,7 +1,7 @@
 from machine import Pin, PWM
 import utime
 
-LEDPIN = 0 #pico = 25, picow = 0
+LEDPIN = 25 #pico = 25, picow = 0
 MAX_VALUE = 100
 
 def LEDindicator():
