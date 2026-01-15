@@ -1,0 +1,24 @@
+esptool --chip esp32c3 --port COM39 erase_flash
+
+esptool --baud 460800 write_flash 0 "C:\repos\ESP32_GENERIC_C3-20250809-v1.26.0.bin"	
+
+Download MicroPython Firmware:
+Obtain the appropriate MicroPython firmware .bin file for your ESP32-C3 Mini from the official MicroPython downloads page. Ensure you select the correct firmware for the ESP32-C3.
+
+Connect ESP32-C3 Mini:
+Connect your ESP32-C3 Mini board to your computer via a USB cable.
+
+Identify the Serial Port:
+Determine the serial port (e.g., COMx on Windows, /dev/ttyUSBx or /dev/ttyACMx on Linux/macOS) assigned to your ESP32-C3 Mini. You can usually find this in your operating system's device manager or by using esptool.py to list available ports.
+
+Erase Flash (Optional but Recommended):
+Before flashing new firmware, it is often good practice to erase the existing flash memory:
+Code
+
+    esptool.py --chip esp32c3 --port <your_serial_port> erase_flash
+Replace <your_serial_port> with the actual serial port.
+Flash MicroPython Firmware: Use esptool.py to flash the downloaded firmware:
+Code
+
+    esptool.py --chip esp32c3 --port <your_serial_port> write_flash -z 0x1000 <path_to_your_firmware.bin>
+Replace <your_serial_port> and <path_to_your_firmware.bin> with the correct values. The 0x1000 specifies the flash address where the firmware will be written.

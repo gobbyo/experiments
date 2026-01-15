@@ -1,0 +1,42 @@
+Creating a plastic or nylon nut and bolt in Autodesk Fusion
+
+Modify->Change Parameter, define the following user parameters:
+
+bolt_diameter, e.g. 16mm
+thread_clearance, e.g. 0.5mm
+thread_section_size, e.g. 2mm
+coil_height, e.g. 14mm
+
+Nut hole size:
+bolt_diameter + (thread_section_size*2) + thread_clearance
+
+Defining the coil for the nut hole:
+Diameter = bolt_diameter + thread_section_size + thread_clearance
+Revolutions, e.g. 6
+Height (length of the coil), e.g. coil_height
+Section = Triangular (Internal-threads facing inward)
+Section Position = On Center
+Section Size = thread_section_size
+Operation = Join
+
+Define the entrances to the nut hole:
+Use a Solid->Box to remove the thread that stick out beyond the edge
+Use a Solid->Teroidal with the inner size of the diameter at the bolt_diameter and teroidal diameter at 1mm 
+Modify the outer edges with a fillet at 1mm to smooth the entrance
+
+
+Bolt size:
+bolt_diameter
+
+Defining the coil for the bolt:
+Diameter = bolt_diameter
+Revolutions, e.g. 48 (multiples of the nut)
+Height (length of the coil), e.g. coil_height
+Section = Triangular (External-threads facing out)
+Section Position = On Center
+Section Size = thread_section_size
+Operation = Join
+
+Define the point of the bolt:
+Use a Solid-Teroidal the inner size of the diameter to the bolt_diameter and teroidal diameter at 5mm
+Modify the outer edges of the point with a fillet at 1mm to smooth the point
