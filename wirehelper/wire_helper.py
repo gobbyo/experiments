@@ -224,11 +224,13 @@ class orthocyclic:
 # Example usage:
 if __name__ == "__main__":
     # Wire resistance example
+    print("\n--- Wire Resistance Example ---")
     wire_length = 20.0  # meters
     wire_awg = 22
     copper_resistivity = 1.72e-8  # Ohm-meters for enamel coated copper magnet wire at 20°C
-    
     resistance = wire_resistance(wire_length, wire_awg, copper_resistivity)
+    print(f"Wire length: {wire_length} m, AWG: {wire_awg}")
+    print(f"Resistivity: {copper_resistivity:.2e} Ohm-meters of enamel coated copper magnet wire at 20°C")
     print(f"Resistance: {resistance:.6e} Ohms")
     
     # Orthocyclic winding example
@@ -246,7 +248,6 @@ if __name__ == "__main__":
     
     # Create orthocyclic winding object
     winding = orthocyclic(spool_length, awg, num_layers * first_layer_turns, drum_diameter)
-    
     total_turns = winding.total_turns()
     total_wire = winding.total_wire_length()
     print(f"Total turns ({num_layers} layers): {total_turns}")
