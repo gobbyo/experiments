@@ -8,7 +8,7 @@ thread_section_size, e.g. 2mm
 coil_height, e.g. 14mm
 
 Nut hole size:
-bolt_diameter + (thread_section_size*2) + thread_clearance
+bolt_diameter + (2 * thread_section_size) + thread_clearance
 
 Defining the coil for the nut hole:
 Diameter = bolt_diameter + thread_section_size + thread_clearance
