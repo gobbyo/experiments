@@ -224,8 +224,8 @@ class orthocyclic:
 # Example usage:
 if __name__ == "__main__":
     # Wire resistance example
-    wire_length = 2.0  # meters
-    wire_awg = 20
+    wire_length = 20.0  # meters
+    wire_awg = 22
     copper_resistivity = 1.72e-8  # Ohm-meters for enamel coated copper magnet wire at 20°C
     
     resistance = wire_resistance(wire_length, wire_awg, copper_resistivity)
