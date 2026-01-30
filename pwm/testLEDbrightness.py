@@ -2,9 +2,9 @@ from machine import Pin, PWM
 import time
 
 def main():
-    led = PWM(Pin(1))
+    led = PWM(Pin(25))
     led.freq(1000)      # Set the frequency value
-    led_value = 20      # LED 20% brightness
+    led_value = 50      # LED 50% brightness
     led.duty_u16(int(led_value * 500)) 
     time.sleep(5)
     led.duty_u16(int(0))
