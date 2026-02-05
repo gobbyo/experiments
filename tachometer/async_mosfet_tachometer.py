@@ -12,6 +12,7 @@ from ir_display_async import IRSensor
 
 # Configuration
 MOSFET_GATE_PIN = 17  # GPIO pin connected to MOSFET gate
+IR_SENSOR_PIN = 22   # GPIO pin connected to IR sensor
 PWM_FREQUENCY = 60    # Hz
 RAMP_STEP = 1         # Increase/decrease PWM by 1% per step
 STEP_DELAY_MS = 200   # Delay between steps in milliseconds (increased for measurements)

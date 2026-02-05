@@ -11,7 +11,8 @@ from ir_display_async import IRSensor
 import display_3461AS_async as sevenseg
 
 # Configuration
-MOSFET_GATE_PIN = 16      # GPIO pin connected to MOSFET gate
+MOSFET_GATE_PIN = 17      # GPIO pin connected to MOSFET gate
+IR_SENSOR_PIN = 22        # GPIO pin connected to IR sensor
 PWM_FREQUENCY = 60        # Hz
 TARGET_FREQUENCY = 40     # Hz - Change this to set target motor speed
 HOLD_TIME_MS = 1000 * 60  # How long to hold at target frequency (10 seconds)
@@ -437,7 +438,7 @@ async def main():
         # Initialize IR sensor
         print("Initializing IR sensor tachometer...")
         global sensor
-        sensor = IRSensor(gpio_pin=26, slots_per_revolution=SLOTS_PER_REV)
+        sensor = IRSensor(gpio_pin=IR_SENSOR_PIN, slots_per_revolution=SLOTS_PER_REV)
         print(f"Slots per revolution: {SLOTS_PER_REV}")
         await asyncio.sleep_ms(500)
         print()

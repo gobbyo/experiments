@@ -1,6 +1,7 @@
 from machine import Pin
 import time
 
+HALL_SENSOR_PIN = 26  # GPIO pin connected to the hall effect sensor
 # Global variables to track state
 detection_count = 0
 last_trigger_time = 0
@@ -66,14 +67,14 @@ def hall_interrupt_handler(pin):
         last_revolution_time = current_time
 
 # Setup hall effect sensor on GPIO26
-hall_sensor = Pin(26, Pin.IN, Pin.PULL_UP)
+hall_sensor = Pin(HALL_SENSOR_PIN, Pin.IN, Pin.PULL_UP)
 
 # Attach interrupt ONLY on falling edge (magnet detected)
 # This prevents double-counting and improves accuracy
 hall_sensor.irq(trigger=Pin.IRQ_FALLING, 
                 handler=hall_interrupt_handler)
 
-print("Hall effect sensor initialized on GPIO26")
+print(f"Hall effect sensor initialized on GPIO{HALL_SENSOR_PIN}")
 print(f"Configuration: {MAGNETS_PER_REVOLUTION} magnets per revolution")
 print("Waiting for magnetic field changes...")
 
