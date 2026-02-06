@@ -13,6 +13,7 @@ from motor_driver_universal import create_motors
 from ir_display_async import display_task, IRSensor
 import ir_display_async
 
+IR_SENSOR_PIN = 22        # GPIO pin connected to IR sensor
 
 async def frequency_ramp_test(start_hz=20, increment_hz=5, hold_time_ms=10000):
     """
@@ -27,7 +28,7 @@ async def frequency_ramp_test(start_hz=20, increment_hz=5, hold_time_ms=10000):
     motor = create_motors()
     
     # Initialize IR sensor using the IRSensor class
-    sensor = IRSensor(gpio_pin=26, slots_per_revolution=5)
+    sensor = IRSensor(gpio_pin=IR_SENSOR_PIN, slots_per_revolution=5)
     
     # Start display task for real-time feedback
     display_task_handle = asyncio.create_task(display_task())

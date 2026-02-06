@@ -17,15 +17,21 @@ def LEDindicator():
     for cycle in range(0, number_of_cycles, 1):
         print("Cycle:", cycle + 1)
         led_value = 0       # LED brightness initial value
+        direction = "brightening up"
+        print(direction)
         for i in range(0, max_iterations, 1):    
             led.duty_u16(int(655.35 * led_value))     # Set the duty cycle, between 0-65535
             utime.sleep_ms(100)                        
             if led_value >= MAX_VALUE:
-                print("fading out")
+                if direction != "fading out":
+                    direction = "fading out"
+                    print(direction)
                 led_value = MAX_VALUE
                 led_speed = -5
             elif led_value <= 0:
-                print("brightening up")
+                if direction != "brightening up":
+                    direction = "brightening up"
+                    print(direction)
                 led_value = 0
                 led_speed = 5
             led_value += led_speed
