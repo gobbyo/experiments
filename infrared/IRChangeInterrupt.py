@@ -57,11 +57,22 @@ class IRChangeMonitor:
         self._flag = asyncio.ThreadSafeFlag()
         self._pin = Pin(self.gpio_pin, Pin.IN)
         self._prev_value = self._pin.value()
+        self._stopped = False
 
         self._pin.irq(
             trigger=Pin.IRQ_RISING | Pin.IRQ_FALLING,
             handler=self._irq_handler,
         )
+
+    def stop(self):
+        if self._stopped:
+            return
+        self._stopped = True
+        try:
+            self._pin.irq(handler=None)
+        except Exception:
+            pass
+        self._flag.set()
 
     def _irq_handler(self, pin):
         value = pin.value()
@@ -82,6 +93,8 @@ class IRChangeMonitor:
 
     async def __anext__(self):
         while True:
+            if self._stopped:
+                raise StopAsyncIteration
             if self._tail != self._head:
                 current_value = self._buf[self._tail]
                 self._tail += 1

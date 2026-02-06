@@ -20,6 +20,7 @@ STEP_DELAY_MS = 200   # Delay between steps in milliseconds (increased for measu
 KICKSTART_MS = 50     # Brief full-power pulse before ramp
 DUTY_HIGH = 0
 DUTY_LOW = 65535
+MIN_EDGE_US = 80      # Reject IR edge intervals shorter than this (us)
 
 class IRTachometer:
     """Edge-based tachometer using IRChangeMonitor."""
@@ -30,16 +31,19 @@ class IRTachometer:
         self._last_rise_us = None
         self._frequency_hz = 0.0
         self._overflow = False
+        self._shutdown = False
 
     async def run(self):
         async for value, overflow in self._monitor:
+            if self._shutdown:
+                break
             if overflow:
                 self._overflow = True
             if value == 1:
                 now = time.ticks_us()
                 if self._last_rise_us is not None:
                     dt_us = time.ticks_diff(now, self._last_rise_us)
-                    if dt_us > 0:
+                    if dt_us >= MIN_EDGE_US:
                         edge_hz = 1_000_000 / dt_us
                         self._frequency_hz = edge_hz / self._slots_per_rev
                 self._last_rise_us = now
@@ -52,25 +56,16 @@ class IRTachometer:
         self._overflow = False
         return overflow
 
-
-async def display_frequency_monitor(sensor, display, stop_event):
-    """
-    Background task that continuously updates display with frequency readings.
-    Runs until stop_event is set.
-    
-    Args:
-        sensor: IRSensor instance
-        stop_event: asyncio.Event that signals when to stop monitoring
-    """
-    try:
-        while not stop_event.is_set():
-            if sensor.pop_overflow():
-                print("IRChangeMonitor IRQ buffer overflow")
-            freq = sensor.get_frequency()
-            display.set_number(int(freq))
-            await asyncio.sleep_ms(500)
-    except asyncio.CancelledError:
-        pass
+    def shutdown(self):
+        self._shutdown = True
+        for method_name in ("stop", "deinit", "close"):
+            method = getattr(self._monitor, method_name, None)
+            if method is not None:
+                try:
+                    method()
+                except Exception:
+                    pass
+                break
 
 
 async def ramp_motor_with_tachometer(sensor):
@@ -93,10 +88,6 @@ async def ramp_motor_with_tachometer(sensor):
     display = sevenseg.AsyncDisplay3461AS()
     display.start()
 
-    # Create event to control monitoring task
-    stop_monitoring = asyncio.Event()
-    monitor_task = asyncio.create_task(display_frequency_monitor(sensor, display, stop_monitoring))
-    
     # Data collection for analysis
     ramp_data = {
         'up': [],      # [(pwm_pct, freq_hz), ...]
@@ -131,6 +122,7 @@ async def ramp_motor_with_tachometer(sensor):
             if duty_pct % 5 == 0:
                 status = "↑ Accelerating" if duty_pct < 100 else "→ Maximum"
                 print(f"{duty_pct:<8} {int(freq):<12} {status:<20}")
+                display.set_number(int(freq))
         
         print("-" * 40)
         print()
@@ -140,6 +132,7 @@ async def ramp_motor_with_tachometer(sensor):
         await asyncio.sleep_ms(2000)
         freq = sensor.get_frequency()
         print(f"Final speed: {int(freq)}Hz")
+        display.set_number(int(freq))
         print()
         
         # RAMP DOWN: 100% to 0%
@@ -163,6 +156,7 @@ async def ramp_motor_with_tachometer(sensor):
             if duty_pct % 5 == 0:
                 status = "↓ Decelerating" if duty_pct > 0 else "◼ Stopped"
                 print(f"{duty_pct:<8} {int(freq):<12} {status:<20}")
+                display.set_number(int(freq))
         
         print("-" * 40)
         print()
@@ -199,17 +193,10 @@ async def ramp_motor_with_tachometer(sensor):
         print(f"Error during motor ramp: {e}")
     
     finally:
-        # Stop monitoring
-        stop_monitoring.set()
-        monitor_task.cancel()
-        try:
-            await monitor_task
-        except asyncio.CancelledError:
-            pass
-
         # Stop display
         try:
             await display.stop()
+            display._clear()
         except Exception:
             pass
         
@@ -236,12 +223,14 @@ async def main():
     except Exception as e:
         print(f"Fatal error: {e}")
     finally:
-        try:
-            if sensor_task is not None:
-                sensor_task.cancel()
+        if sensor_task is not None:
+            sensor.shutdown()
+            try:
                 await sensor_task
-        except Exception:
-            pass
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
 
 
 def run_test():
@@ -250,6 +239,8 @@ def run_test():
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\nTest interrupted by user")
+    except asyncio.CancelledError:
+        print("\nTest cancelled")
     except Exception as e:
         print(f"Test failed: {e}")
 
