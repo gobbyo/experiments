@@ -9,13 +9,7 @@ from machine import Pin, PWM
 import uasyncio as asyncio
 import display_3461AS_async as sevenseg
 import time
-
-try:
-    from IRChangeInterrupt import IRChangeMonitor
-except ImportError:
-    import sys
-    sys.path.append("../infrared")
-    from IRChangeInterrupt import IRChangeMonitor
+from IRChangeInterrupt import IRChangeMonitor
 
 # Configuration
 MOSFET_GATE_PIN = 17  # GPIO pin connected to MOSFET gate
@@ -23,20 +17,19 @@ IR_SENSOR_PIN = 22   # GPIO pin connected to IR sensor
 PWM_FREQUENCY = 60    # Hz
 RAMP_STEP = 1         # Increase/decrease PWM by 1% per step
 STEP_DELAY_MS = 200   # Delay between steps in milliseconds (increased for measurements)
-MIN_EDGE_INTERVAL_US = 1000  # Ignore edges closer than this (debounce)
-KICKSTART_MS = 100    # Brief full-power pulse before ramp
-
+KICKSTART_MS = 50     # Brief full-power pulse before ramp
+DUTY_HIGH = 0
+DUTY_LOW = 65535
 
 class IRTachometer:
     """Edge-based tachometer using IRChangeMonitor."""
 
-    def __init__(self, gpio_pin, slots_per_revolution=1, buf_size=32, debounce_us=MIN_EDGE_INTERVAL_US):
+    def __init__(self, gpio_pin, slots_per_revolution=1, buf_size=32):
         self._monitor = IRChangeMonitor(gpio_pin=gpio_pin, buf_size=buf_size)
         self._slots_per_rev = max(1, int(slots_per_revolution))
         self._last_rise_us = None
         self._frequency_hz = 0.0
         self._overflow = False
-        self._debounce_us = max(0, int(debounce_us))
 
     async def run(self):
         async for value, overflow in self._monitor:
@@ -46,12 +39,10 @@ class IRTachometer:
                 now = time.ticks_us()
                 if self._last_rise_us is not None:
                     dt_us = time.ticks_diff(now, self._last_rise_us)
-                    if dt_us > self._debounce_us:
+                    if dt_us > 0:
                         edge_hz = 1_000_000 / dt_us
                         self._frequency_hz = edge_hz / self._slots_per_rev
-                        self._last_rise_us = now
-                else:
-                    self._last_rise_us = now
+                self._last_rise_us = now
 
     def get_frequency(self):
         return self._frequency_hz
@@ -114,19 +105,19 @@ async def ramp_motor_with_tachometer(sensor):
     
     try:
         # Kickstart motor before ramping
-        motor_pwm.duty_u16(65535)
+        motor_pwm.duty_u16(DUTY_HIGH)
         await asyncio.sleep_ms(KICKSTART_MS)
-        motor_pwm.duty_u16(0)
+        motor_pwm.duty_u16(DUTY_LOW)
         await asyncio.sleep_ms(50)
 
-        # RAMP UP: 0% to 100%
-        print("Ramping UP from 0% to 100%...")
+        # RAMP UP: 30% to 100%
+        print("Ramping UP from 30% to 100%...")
         print(f"{'PWM%':<8} {'Freq(Hz)':<12} {'Status':<20}")
         print("-" * 40)
         
-        for duty_pct in range(0, 101, RAMP_STEP):
+        for duty_pct in range(30, 101, RAMP_STEP):
             # Set PWM
-            duty_value = int((duty_pct / 100) * 65535)
+            duty_value = DUTY_LOW - int((duty_pct / 100) * DUTY_LOW)
             motor_pwm.duty_u16(duty_value)
             
             # Wait for motor to respond
@@ -158,7 +149,7 @@ async def ramp_motor_with_tachometer(sensor):
         
         for duty_pct in range(100, -1, -RAMP_STEP):
             # Set PWM
-            duty_value = int((duty_pct / 100) * 65535)
+            duty_value = DUTY_LOW - int((duty_pct / 100) * DUTY_LOW)
             motor_pwm.duty_u16(duty_value)
             
             # Wait for motor to respond
@@ -223,7 +214,7 @@ async def ramp_motor_with_tachometer(sensor):
             pass
         
         # Ensure motor is stopped
-        motor_pwm.duty_u16(0)
+        motor_pwm.duty_u16(DUTY_LOW)
         motor_pwm.deinit()
         print("\nMotor stopped and PWM disabled.")
 

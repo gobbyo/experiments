@@ -1,29 +1,71 @@
 """
 MOSFET motor control with target frequency hold.
-Ramps motor to a specific frequency, holds for 5 seconds, then ramps down.
+Ramps motor to a specific frequency, holds for HOLD_TIME_MS, then ramps down.
 Includes real-time feedback via IR sensor tachometer.
 """
 
 from machine import Pin, PWM
 import uasyncio as asyncio
-import sys
-from ir_display_async import IRSensor
 import display_3461AS_async as sevenseg
+import time
+from IRChangeInterrupt import IRChangeMonitor
 
 # Configuration
 MOSFET_GATE_PIN = 17      # GPIO pin connected to MOSFET gate
 IR_SENSOR_PIN = 22        # GPIO pin connected to IR sensor
 PWM_FREQUENCY = 60        # Hz
 TARGET_FREQUENCY = 40     # Hz - Change this to set target motor speed
-HOLD_TIME_MS = 1000 * 60  # How long to hold at target frequency (10 seconds)
+HOLD_TIME_MS = 1000 * 60  # How long to hold at target frequency
 RAMP_STEP = 1             # Increase/decrease PWM by 1% per step
 STEP_DELAY_MS = 200       # Delay between steps in milliseconds
 FREQUENCY_TOLERANCE = 1   # Hz - How close to target before holding
 SLOTS_PER_REV = 1         # Number of reflective slots on the encoder disk
+KICKSTART_MS = 50          # Brief full-power pulse before ramp
+DUTY_HIGH = 0
+DUTY_LOW = 65535
+MIN_RAMP_PWM = 30          # Minimum PWM percent for ramp start
 
 # Globals
 display = None
 sensor = None
+
+
+def _set_motor_pwm_pct(motor_pwm, duty_pct):
+    duty_pct = max(0, min(100, int(duty_pct)))
+    duty_value = DUTY_LOW - int((duty_pct / 100) * DUTY_LOW)
+    motor_pwm.duty_u16(duty_value)
+
+
+class IRTachometer:
+    """Edge-based tachometer using IRChangeMonitor."""
+
+    def __init__(self, gpio_pin, slots_per_revolution=1, buf_size=32):
+        self._monitor = IRChangeMonitor(gpio_pin=gpio_pin, buf_size=buf_size)
+        self._slots_per_rev = max(1, int(slots_per_revolution))
+        self._last_rise_us = None
+        self._frequency_hz = 0.0
+        self._overflow = False
+
+    async def run(self):
+        async for value, overflow in self._monitor:
+            if overflow:
+                self._overflow = True
+            if value == 1:
+                now = time.ticks_us()
+                if self._last_rise_us is not None:
+                    dt_us = time.ticks_diff(now, self._last_rise_us)
+                    if dt_us > 0:
+                        edge_hz = 1_000_000 / dt_us
+                        self._frequency_hz = edge_hz / self._slots_per_rev
+                self._last_rise_us = now
+
+    def get_frequency(self):
+        return self._frequency_hz
+
+    def pop_overflow(self):
+        overflow = self._overflow
+        self._overflow = False
+        return overflow
 
 
 async def frequency_monitor(sensor, stop_event):
@@ -36,6 +78,8 @@ async def frequency_monitor(sensor, stop_event):
     """
     try:
         while not stop_event.is_set():
+            if sensor.pop_overflow():
+                print("IRChangeMonitor IRQ buffer overflow")
             freq = sensor.get_frequency()
             if display:
                 display.set_number(int(freq))
@@ -61,7 +105,7 @@ async def calibrate_motor(motor_pwm, sensor):
     print()
     
     # Set to 100% PWM
-    motor_pwm.duty_u16(65535)
+    _set_motor_pwm_pct(motor_pwm, 100)
     
     # Let motor spin up
     await asyncio.sleep_ms(2000)
@@ -90,7 +134,7 @@ async def calibrate_motor(motor_pwm, sensor):
     
     # Stop motor
     print("Stopping motor...")
-    motor_pwm.duty_u16(0)
+    motor_pwm.duty_u16(DUTY_LOW)
     await asyncio.sleep_ms(3000)
     
     print()
@@ -118,12 +162,12 @@ async def ramp_to_target(motor_pwm, sensor, target_hz, tolerance_hz=FREQUENCY_TO
     """
     print(f"Ramping to target frequency of {target_hz}Hz (±{tolerance_hz}Hz tolerance)...")
     
-    current_pwm = 5  # Start at 5% PWM
+    current_pwm = MIN_RAMP_PWM  # Start at minimum effective PWM
     max_iterations = 100
     iteration = 0
     
     while iteration < max_iterations:
-        motor_pwm.duty_u16(int((current_pwm / 100) * 65535))
+        _set_motor_pwm_pct(motor_pwm, current_pwm)
         await asyncio.sleep_ms(STEP_DELAY_MS)
         
         freq = sensor.get_frequency()
@@ -144,7 +188,7 @@ async def ramp_to_target(motor_pwm, sensor, target_hz, tolerance_hz=FREQUENCY_TO
             current_pwm = min(100, current_pwm + RAMP_STEP)
         else:
             # Too fast, decrease PWM
-            current_pwm = max(1, current_pwm - RAMP_STEP)
+            current_pwm = max(MIN_RAMP_PWM, current_pwm - RAMP_STEP)
         
         iteration += 1
     
@@ -173,19 +217,19 @@ async def ramp_to_target_from_calibration(motor_pwm, sensor, max_freq_hz, target
 
     # Calculate starting PWM based on target Hz as percentage of max
     if max_freq_hz > 0:
-        estimated_pwm = max(5, int((target_hz / max_freq_hz) * 100))
+        estimated_pwm = max(MIN_RAMP_PWM, int((target_hz / max_freq_hz) * 100))
     else:
         estimated_pwm = 5
 
     print(f"Calculated starting PWM: {estimated_pwm}% (target {target_hz}Hz / max {int(max_freq_hz)}Hz)")
     print()
 
-    current_pwm = max(5, estimated_pwm - 10)  # Start 10% below estimated
+    current_pwm = max(MIN_RAMP_PWM, estimated_pwm - 10)  # Start 10% below estimated
     max_iterations = 50
     iteration = 0
 
     while iteration < max_iterations:
-        motor_pwm.duty_u16(int((current_pwm / 100) * 65535))
+        _set_motor_pwm_pct(motor_pwm, current_pwm)
         await asyncio.sleep_ms(STEP_DELAY_MS)
 
         freq = sensor.get_frequency()
@@ -206,7 +250,7 @@ async def ramp_to_target_from_calibration(motor_pwm, sensor, max_freq_hz, target
             current_pwm = min(100, current_pwm + RAMP_STEP)
         else:
             # Too fast, decrease PWM
-            current_pwm = max(1, current_pwm - RAMP_STEP)
+            current_pwm = max(MIN_RAMP_PWM, current_pwm - RAMP_STEP)
 
         iteration += 1
 
@@ -284,7 +328,7 @@ async def hold_frequency(motor_pwm, sensor, hold_pwm_pct, target_hz, hold_ms=HOL
             if abs(new_pwm - current_pwm) > 0.1:
                 old_pwm = current_pwm
                 current_pwm = new_pwm
-                motor_pwm.duty_u16(int((current_pwm / 100) * 65535))
+                _set_motor_pwm_pct(motor_pwm, current_pwm)
                 print(f"  [Adjust] Error {error:+5.1f}Hz -> PWM {old_pwm:5.1f}% -> {current_pwm:5.1f}% ({adjustment:+.2f}%)")
             
             last_adjustment = elapsed
@@ -334,7 +378,7 @@ async def ramp_down(motor_pwm, sensor, current_pwm, target_pwm):
     print(f"\nRamping down from {start_pwm}% to 0% (current: {int(current_pwm)}%, target: {int(target_pwm)}%)...")
     
     for pwm_step in range(start_pwm, -1, -RAMP_STEP):
-        motor_pwm.duty_u16(int((pwm_step / 100) * 65535))
+        _set_motor_pwm_pct(motor_pwm, pwm_step)
         await asyncio.sleep_ms(STEP_DELAY_MS)
         
         freq = sensor.get_frequency()
@@ -384,8 +428,14 @@ async def run_frequency_hold_test(target_hz=TARGET_FREQUENCY):
         max_frequency = await calibrate_motor(motor_pwm, sensor)
 
         # Ensure motor is stopped before ramping
-        motor_pwm.duty_u16(0)
+        motor_pwm.duty_u16(DUTY_LOW)
         await asyncio.sleep_ms(300)
+
+        # Kickstart motor before ramping
+        motor_pwm.duty_u16(DUTY_HIGH)
+        await asyncio.sleep_ms(KICKSTART_MS)
+        motor_pwm.duty_u16(DUTY_LOW)
+        await asyncio.sleep_ms(50)
 
         # PHASE 1: Ramp up to target frequency using calibration data
         hold_pwm_pct, achieved_freq = await ramp_to_target_from_calibration(
@@ -414,7 +464,7 @@ async def run_frequency_hold_test(target_hz=TARGET_FREQUENCY):
     finally:
         # Clean up
         stop_monitoring.set()
-        motor_pwm.duty_u16(0)
+        motor_pwm.duty_u16(DUTY_LOW)
         motor_pwm.deinit()
 
         try:
@@ -434,11 +484,13 @@ async def run_frequency_hold_test(target_hz=TARGET_FREQUENCY):
 
 async def main():
     """Main async function - initializes sensor and runs test."""
+    sensor_task = None
     try:
         # Initialize IR sensor
         print("Initializing IR sensor tachometer...")
         global sensor
-        sensor = IRSensor(gpio_pin=IR_SENSOR_PIN, slots_per_revolution=SLOTS_PER_REV)
+        sensor = IRTachometer(gpio_pin=IR_SENSOR_PIN, slots_per_revolution=SLOTS_PER_REV)
+        sensor_task = asyncio.create_task(sensor.run())
         print(f"Slots per revolution: {SLOTS_PER_REV}")
         await asyncio.sleep_ms(500)
         print()
@@ -448,6 +500,13 @@ async def main():
     
     except Exception as e:
         print(f"Fatal error: {e}")
+    finally:
+        try:
+            if sensor_task is not None:
+                sensor_task.cancel()
+                await sensor_task
+        except Exception:
+            pass
 
 
 def run_test(target_hz=TARGET_FREQUENCY):
