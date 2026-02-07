@@ -12,7 +12,7 @@ MOSFET_GATE_PIN = 17  # GPIO pin connected to MOSFET gate
 PWM_FREQUENCY = 60    # Hz
 RAMP_STEP = 1         # Increase/decrease PWM by 1% per step
 STEP_DELAY_MS = 100   # Delay between steps in milliseconds
-
+MAX_DUTY = 65535     # Maximum duty cycle value for 16-bit resolution
 
 async def ramp_motor():
     """Ramp motor speed from 0% to 100% and back down to 0%."""
@@ -31,7 +31,7 @@ async def ramp_motor():
         print("Ramping UP from 0% to 100%...")
         for duty_pct in range(0, 101, RAMP_STEP):
             # Convert percentage to 16-bit duty cycle value (0-65535)
-            duty_value = int((duty_pct / 100) * 65535)
+            duty_value = MAX_DUTY - int((duty_pct / 100) * MAX_DUTY)
             motor_pwm.duty_u16(duty_value)
             
             # Print progress every 10%
@@ -50,7 +50,7 @@ async def ramp_motor():
         print("Ramping DOWN from 100% to 0%...")
         for duty_pct in range(100, -1, -RAMP_STEP):
             # Convert percentage to 16-bit duty cycle value (0-65535)
-            duty_value = int((duty_pct / 100) * 65535)
+            duty_value = MAX_DUTY - int((duty_pct / 100) * MAX_DUTY)
             motor_pwm.duty_u16(duty_value)
             
             # Print progress every 10%
@@ -67,7 +67,7 @@ async def ramp_motor():
     
     finally:
         # Ensure motor is stopped
-        motor_pwm.duty_u16(0)
+        motor_pwm.duty_u16(MAX_DUTY)  # Set motor to off at MAX_DUTY
         motor_pwm.deinit()
         print("Motor stopped and PWM disabled.")
 

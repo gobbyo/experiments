@@ -15,7 +15,7 @@ from IRChangeInterrupt import IRChangeMonitor
 MOSFET_GATE_PIN = 17      # GPIO pin connected to MOSFET gate
 IR_SENSOR_PIN = 22        # GPIO pin connected to IR sensor
 PWM_FREQUENCY = 60        # Hz
-TARGET_FREQUENCY = 40     # Hz - Change this to set target motor speed
+TARGET_FREQUENCY = 50     # Hz - Change this to set target motor speed
 HOLD_TIME_MS = 1000 * 60  # How long to hold at target frequency
 RAMP_STEP = 1             # Increase/decrease PWM by 1% per step
 STEP_DELAY_MS = 200       # Delay between steps in milliseconds
