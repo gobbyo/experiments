@@ -2,6 +2,7 @@
 MOSFET motor control with target frequency hold.
 Ramps motor to a specific frequency, holds for HOLD_TIME_MS, then ramps down.
 Includes real-time feedback via IR sensor tachometer.
+Uses per-second average feedback during the hold phase.
 """
 
 from machine import Pin, PWM
@@ -15,15 +16,14 @@ from IRChangeInterrupt import IRChangeMonitor
 MOSFET_GATE_PIN = 17      # GPIO pin connected to MOSFET gate
 IR_SENSOR_PIN = 22        # GPIO pin connected to IR sensor
 TARGET_FREQUENCY = 50     # Hz - Change this to set target motor speed
-PWM_FREQUENCY = 80        # Hz - low Hz works well for brush motors
+PWM_FREQUENCY = 60        # Hz - low Hz works well for brush motors
 HOLD_TIME_MS = 1000 * 60  # How long to hold at target frequency
 RAMP_STEP = 1             # Increase/decrease PWM by 1% per step
 STEP_DELAY_MS = 200       # Delay between steps in milliseconds
+RAMP_UP_DELAY_MS = 5000    # Delay between ramp-up steps in milliseconds
 FREQUENCY_TOLERANCE = 1   # Hz - How close to target before holding
 SLOTS_PER_REV = 1         # Number of reflective slots on the encoder disk
-KICKSTART_MS = 50          # Brief full-power pulse before ramp
-CALIBRATION_PWM = 80       # Cap calibration PWM to avoid brownouts
-CALIBRATION_SPINUP_MS = 2000  # Spin-up time before taking readings
+KICKSTART_MS = 100         # Brief full-power pulse before ramp
 DUTY_HIGH = 0
 DUTY_LOW = 65535
 MIN_RAMP_PWM = 30          # Minimum PWM percent for ramp start
@@ -140,73 +140,6 @@ async def frequency_monitor(sensor, stop_event):
     except asyncio.CancelledError:
         pass
 
-async def calibrate_motor(motor_pwm, sensor):
-    """
-    Calibrate motor by running at 100% PWM and measuring max frequency.
-    
-    Args:
-        motor_pwm: PWM instance for motor control
-        sensor: IRSensor instance
-    
-    Returns:
-        Max frequency measured at 100% PWM
-    """
-    print("=" * 50)
-    print("MOTOR CALIBRATION")
-    print("=" * 50)
-    print(f"Setting motor to {CALIBRATION_PWM}% PWM to measure maximum frequency...")
-    print()
-
-    gc.collect()
-    
-    # Set to calibration PWM
-    _set_motor_pwm_pct(motor_pwm, CALIBRATION_PWM)
-    
-    print("line 151: Waiting for motor to spin up...")
-    # Let motor spin up
-    await _sleep_with_heartbeat(CALIBRATION_SPINUP_MS, label="Spinup")
-
-    await _ensure_sensor_task(sensor)
-    
-    # Collect frequency readings
-    max_freq = 0
-    readings = []
-
-    gc.collect()
-    
-    print(f"Collecting frequency readings at {CALIBRATION_PWM}% PWM:")
-    for i in range(10):
-        freq = sensor.get_frequency()
-        readings.append(freq)
-        max_freq = max(max_freq, freq)
-        print(f"  Reading {i+1}: {int(freq)}Hz")
-        if display:
-            display.set_number(int(freq))
-        if i % 2 == 1:
-            gc.collect()
-        await asyncio.sleep_ms(1000)
-    
-    # Calculate average
-    avg_freq = sum(readings) / len(readings)
-    
-    print()
-    print(f"Maximum Frequency: {int(max_freq)}Hz")
-    print(f"Average Frequency: {int(avg_freq)}Hz")
-    print()
-    
-    # Stop motor
-    print("Stopping motor...")
-    motor_pwm.duty_u16(DUTY_LOW)
-    await asyncio.sleep_ms(3000)
-    
-    print()
-    print("=" * 50)
-    print("Calibration Complete!")
-    print("=" * 50)
-    print()
-    
-    return max_freq
-
 
 async def ramp_to_target(motor_pwm, sensor, target_hz, tolerance_hz=FREQUENCY_TOLERANCE):
     """
@@ -225,14 +158,14 @@ async def ramp_to_target(motor_pwm, sensor, target_hz, tolerance_hz=FREQUENCY_TO
     print(f"Ramping to target frequency of {target_hz}Hz (±{tolerance_hz}Hz tolerance)...")
     
     current_pwm = MIN_RAMP_PWM  # Start at minimum effective PWM
-    max_iterations = 100
+    max_iterations = 5
     iteration = 0
     
     while iteration < max_iterations:
         if iteration % 10 == 0:
             gc.collect()
         _set_motor_pwm_pct(motor_pwm, current_pwm)
-        await asyncio.sleep_ms(STEP_DELAY_MS)
+        await asyncio.sleep_ms(RAMP_UP_DELAY_MS)
         
         freq = sensor.get_frequency()
         
@@ -261,74 +194,10 @@ async def ramp_to_target(motor_pwm, sensor, target_hz, tolerance_hz=FREQUENCY_TO
     return current_pwm, freq
 
 
-async def ramp_to_target_from_calibration(motor_pwm, sensor, max_freq_hz, target_hz, tolerance_hz=FREQUENCY_TOLERANCE):
-    """
-    Ramp motor to target frequency using calibration data.
-    Calculates starting PWM from max frequency and ramps to target.
-
-    Args:
-        motor_pwm: PWM instance for motor control
-        sensor: IRSensor instance
-        max_freq_hz: Maximum frequency measured during calibration
-        target_hz: Target frequency in Hz
-        tolerance_hz: Acceptable error in Hz
-
-    Returns:
-        Tuple of (final_pwm_pct, achieved_freq)
-    """
-    print(f"Ramping to target frequency of {target_hz}Hz (using calibration max at {CALIBRATION_PWM}% PWM: {int(max_freq_hz)}Hz)...")
-    print()
-
-    # Calculate starting PWM based on target Hz as percentage of max
-    if max_freq_hz > 0:
-        estimated_pwm = max(MIN_RAMP_PWM, int((target_hz / max_freq_hz) * CALIBRATION_PWM))
-    else:
-        estimated_pwm = 5
-
-    print(f"Calculated starting PWM: {estimated_pwm}% (target {target_hz}Hz / max {int(max_freq_hz)}Hz)")
-    print()
-
-    current_pwm = max(MIN_RAMP_PWM, estimated_pwm - 10)  # Start 10% below estimated
-    max_iterations = 50
-    iteration = 0
-
-    while iteration < max_iterations:
-        if iteration % 10 == 0:
-            gc.collect()
-        _set_motor_pwm_pct(motor_pwm, current_pwm)
-        await asyncio.sleep_ms(STEP_DELAY_MS)
-
-        freq = sensor.get_frequency()
-
-        if iteration % 3 == 0:  # Print every 3 iterations
-            print(f"  PWM: {current_pwm:3d}% -> {int(freq):3d}Hz")
-            if display:
-                display.set_number(int(freq))
-
-        # Check if we're within tolerance of target
-        if abs(freq - target_hz) <= tolerance_hz:
-            print(f"  ✓ Target frequency reached: {int(freq)}Hz at PWM {current_pwm}%")
-            return current_pwm, freq
-
-        # Adjust PWM based on error
-        if freq < target_hz - tolerance_hz:
-            # Too slow, increase PWM
-            current_pwm = min(100, current_pwm + RAMP_STEP)
-        else:
-            # Too fast, decrease PWM
-            current_pwm = max(MIN_RAMP_PWM, current_pwm - RAMP_STEP)
-
-        iteration += 1
-
-    # If we reach here, we couldn't hit the target exactly
-    print(f"  Warning: Could not reach exact target, settled at {int(freq)}Hz at PWM {current_pwm}%")
-    return current_pwm, freq
-
-
 async def hold_frequency(motor_pwm, sensor, hold_pwm_pct, target_hz, hold_ms=HOLD_TIME_MS):
     """
-    Hold motor at target frequency using proportional feedback control.
-    Uses gentle adjustments to compensate for motor drift without oscillating.
+    Hold motor at target frequency using per-second average feedback control.
+    Uses finer adjustments when within 10Hz of the target.
     
     Args:
         motor_pwm: PWM instance for motor control
@@ -341,76 +210,84 @@ async def hold_frequency(motor_pwm, sensor, hold_pwm_pct, target_hz, hold_ms=HOL
         Final adjusted PWM percentage
     """
     print(f"\nHolding at target {target_hz}Hz for {hold_ms/1000:.1f} seconds (starting PWM: {hold_pwm_pct}%)...")
-    print(f"Using proportional feedback control to maintain stability.")
+    print("Using per-second average feedback control to maintain stability.")
     print()
     
     elapsed = 0
     current_pwm = float(hold_pwm_pct)
-    adjustment_interval = 200  # Adjust every 200ms for tighter control
-    last_adjustment = -adjustment_interval  # Allow immediate first adjustment
+    sample_interval_ms = 100
+    adjust_interval_ms = 1000
+    last_adjustment = -adjust_interval_ms
     freq_readings = []
-    error_history = []
+    avg_errors = []
+    current_window = []
     
     # Calculate 1% tolerance in Hz (tighter tracking)
-    tolerance_hz = (target_hz * 1) / 100
+    tolerance_hz = max(1.0, (target_hz * 1) / 100)
     
     while elapsed < hold_ms:
         if elapsed % 2000 == 0:
             gc.collect()
         freq = sensor.get_frequency()
         freq_readings.append(freq)
+        current_window.append(freq)
         
-        # Calculate error (positive when too slow, negative when too fast)
-        error = target_hz - freq
-        error_history.append(error)
-        
-        # Adjust more frequently for better stability
-        if elapsed - last_adjustment >= adjustment_interval:
-            # Use proportional control: adjust based on error magnitude
-            # Small adjustments for small errors, larger for large errors
-            
-            if abs(error) > tolerance_hz * 3:
-                # Large error (>~3% of target): more aggressive
-                adjustment = 0.7 * (error / 10)  # 0.7% per Hz
-            elif abs(error) > tolerance_hz:
-                # Medium error (>~1% of target): moderate correction
-                adjustment = 0.35 * (error / 10)  # 0.35% per Hz
+        if elapsed - last_adjustment >= adjust_interval_ms:
+            if current_window:
+                avg_freq = sum(current_window) / len(current_window)
             else:
-                # Small error (<~1% of target): minimal adjustment
-                adjustment = 0.15 * (error / 10)  # 0.15% per Hz
+                avg_freq = freq
+            current_window = []
+            
+            # Calculate error from the per-second average
+            error = target_hz - avg_freq
+            avg_errors.append(error)
+            
+            # Finer adjustment when within 10Hz of target
+            if abs(error) <= 10:
+                adjustment = 0.10 * (error / 10)  # 0.10% per 10Hz
+                max_step = 0.5
+            elif abs(error) <= tolerance_hz * 3:
+                adjustment = 0.22 * (error / 10)  # moderate
+                max_step = 1.5
+            else:
+                adjustment = 0.40 * (error / 10)  # more aggressive
+                max_step = 2.5
             
             # Apply damping to prevent oscillation when error changes sign
-            if len(error_history) >= 2:
-                prev_error = error_history[-2]
+            if len(avg_errors) >= 2:
+                prev_error = avg_errors[-2]
                 if (error > 0 and prev_error < 0) or (error < 0 and prev_error > 0):
-                    # Error changed sign: reduce adjustment strength by 25%
                     adjustment *= 0.75
             
-            # Apply adjustment with bounds checking
+            # Clamp adjustment to keep control stable
+            adjustment = max(-max_step, min(max_step, adjustment))
+            
             new_pwm = current_pwm + adjustment
             new_pwm = max(1, min(100, new_pwm))
             
-            # Only print and apply if adjustment is significant (> 0.1%)
-            if abs(new_pwm - current_pwm) > 0.1:
+            if abs(new_pwm - current_pwm) > 0.05:
                 old_pwm = current_pwm
                 current_pwm = new_pwm
                 _set_motor_pwm_pct(motor_pwm, current_pwm)
-                print(f"  [Adjust] Error {error:+5.1f}Hz -> PWM {old_pwm:5.1f}% -> {current_pwm:5.1f}% ({adjustment:+.2f}%)")
+                print(f"  [Adjust] Avg {avg_freq:5.1f}Hz Error {error:+5.1f}Hz -> PWM {old_pwm:5.2f}% -> {current_pwm:5.2f}% ({adjustment:+.2f}%)")
                 if display:
-                    display.set_number(int(freq))
+                    display.set_number(int(avg_freq))
             
             last_adjustment = elapsed
         
         # Print status every 1 second
         if elapsed % 1000 == 0:
             remaining = (hold_ms - elapsed) / 1000
-            status = "✓" if abs(error) <= tolerance_hz else "~"
-            print(f"  {status}  {int(freq):3d}Hz @ PWM {current_pwm:5.1f}% (target: {target_hz}Hz, error: {error:+5.1f}Hz, {remaining:.1f}s remaining)")
+            avg_now = sum(current_window) / len(current_window) if current_window else freq
+            error_now = target_hz - avg_now
+            status = "✓" if abs(error_now) <= tolerance_hz else "~"
+            print(f"  {status}  {int(avg_now):3d}Hz @ PWM {current_pwm:5.2f}% (target: {target_hz}Hz, error: {error_now:+5.1f}Hz, {remaining:.1f}s remaining)")
             if display:
-                display.set_number(int(freq))
+                display.set_number(int(avg_now))
         
-        await asyncio.sleep_ms(100)
-        elapsed += 100
+        await asyncio.sleep_ms(sample_interval_ms)
+        elapsed += sample_interval_ms
     
     # Print summary statistics
     if freq_readings:
@@ -423,11 +300,11 @@ async def hold_frequency(motor_pwm, sensor, hold_pwm_pct, target_hz, hold_ms=HOL
         success_pct = (good_readings / len(freq_readings)) * 100
         
         print()
-        print(f"Hold phase summary:")
+        print("Hold phase summary:")
         print(f"  Average: {int(avg_freq)}Hz (target: {target_hz}Hz, error: {int(avg_freq - target_hz):+d}Hz)")
         print(f"  Range: {int(min_freq)}-{int(max_freq)}Hz (±{int((max_freq - min_freq) / 2)}Hz)")
-        print(f"  Within 2% tolerance: {success_pct:.1f}% ({good_readings}/{len(freq_readings)} readings)")
-        print(f"  Final PWM: {current_pwm:.1f}% (started at {hold_pwm_pct}%)")
+        print(f"  Within 1% tolerance: {success_pct:.1f}% ({good_readings}/{len(freq_readings)} readings)")
+        print(f"  Final PWM: {current_pwm:.2f}% (started at {hold_pwm_pct}%)")
     
     return current_pwm
 
@@ -459,7 +336,7 @@ async def ramp_down(motor_pwm, sensor, current_pwm, target_pwm):
             if display:
                 display.set_number(int(freq))
     
-    print(f"  Motor stopped")
+    print("  Motor stopped")
 
 
 async def run_frequency_hold_test(target_hz=TARGET_FREQUENCY):
@@ -474,14 +351,14 @@ async def run_frequency_hold_test(target_hz=TARGET_FREQUENCY):
     motor_pwm = PWM(Pin(MOSFET_GATE_PIN))
     motor_pwm.freq(PWM_FREQUENCY)
     
-    print(f"Target Frequency Hold Test")
-    print(f"=" * 50)
+    print("Target Frequency Hold Test")
+    print("=" * 50)
     print(f"Target Frequency: {target_hz}Hz")
     print(f"Hold Duration: {HOLD_TIME_MS/1000:.1f} seconds")
     print(f"PWM Frequency: {PWM_FREQUENCY}Hz")
     print(f"MOSFET Gate Pin: GPIO{MOSFET_GATE_PIN}")
     print(f"Encoder Slots/Rev: {SLOTS_PER_REV} (target {target_hz}Hz)")
-    print(f"=" * 50)
+    print("=" * 50)
     print()
 
     # Initialize 4-digit display
@@ -489,15 +366,14 @@ async def run_frequency_hold_test(target_hz=TARGET_FREQUENCY):
     gc.collect()
     display = sevenseg.AsyncDisplay3461AS()
     display.start()
+
+    await _ensure_sensor_task(sensor)
     
     # Create event to control monitoring task
     stop_monitoring = asyncio.Event()
     monitor_task = asyncio.create_task(frequency_monitor(sensor, stop_monitoring))
     
     try:
-        # PHASE 0: Calibrate at 100% to determine max Hz
-        max_frequency = await calibrate_motor(motor_pwm, sensor)
-
         # Ensure motor is stopped before ramping
         motor_pwm.duty_u16(DUTY_LOW)
         await asyncio.sleep_ms(300)
@@ -508,21 +384,18 @@ async def run_frequency_hold_test(target_hz=TARGET_FREQUENCY):
         motor_pwm.duty_u16(DUTY_LOW)
         await asyncio.sleep_ms(50)
 
-        # PHASE 1: Ramp up to target frequency using calibration data
-        hold_pwm_pct, achieved_freq = await ramp_to_target_from_calibration(
-            motor_pwm, sensor, max_frequency, target_hz, FREQUENCY_TOLERANCE
+        # PHASE 1: Ramp up to target frequency
+        hold_pwm_pct, achieved_freq = await ramp_to_target(
+            motor_pwm, sensor, target_hz, FREQUENCY_TOLERANCE
         )
-        
-        # Calculate target PWM from calibration for ramp-down reference
-        target_pwm = int((target_hz / max_frequency) * 100) if max_frequency > 0 else hold_pwm_pct
         
         # PHASE 2: Hold at target frequency
         final_pwm = await hold_frequency(
             motor_pwm, sensor, hold_pwm_pct, target_hz, HOLD_TIME_MS
         )
         
-        # PHASE 3: Ramp down to stop (start from lower of final or target PWM)
-        await ramp_down(motor_pwm, sensor, final_pwm, target_pwm)
+        # PHASE 3: Ramp down to stop (start from lower of final or hold PWM)
+        await ramp_down(motor_pwm, sensor, final_pwm, hold_pwm_pct)
         
         print()
         print("=" * 50)
@@ -573,6 +446,8 @@ async def main():
         print(f"Slots per revolution: {SLOTS_PER_REV}")
         await asyncio.sleep_ms(500)
         print()
+
+        await _ensure_sensor_task(sensor)
         
         # Run the frequency hold test
         test_task = asyncio.create_task(run_frequency_hold_test(TARGET_FREQUENCY))
