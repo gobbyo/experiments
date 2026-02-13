@@ -72,9 +72,9 @@ async def test_nema17_stepper():
     print("Enabling motor...")
     motor.enabled = True
 
-    TOTAL_REVS = 15
+    TOTAL_REVS = 40
     STEPS_PER_REV = 200
-    DELAY_MS = 2  # Delay between steps in milliseconds
+    DELAY_MS = 4 # Delay between steps in milliseconds
 
     try:
         
