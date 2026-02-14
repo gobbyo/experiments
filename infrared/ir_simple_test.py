@@ -1,5 +1,6 @@
 from machine import Pin
 from utime import sleep_ms
+
 ir=Pin(22,Pin.IN)
 
 prev_value = -1

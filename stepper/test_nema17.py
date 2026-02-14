@@ -78,8 +78,8 @@ async def test_nema17_stepper():
 
     try:
         
-        motor.direction = CLOCKWISE
-        print(f"\nRotating clockwise for {TOTAL_REVS} revolution(s)...")
+        motor.direction = COUNTERCLOCKWISE
+        print(f"\nRotating counterclockwise for {TOTAL_REVS} revolution(s)...")
         await motor.step_motor(TOTAL_REVS * STEPS_PER_REV, DELAY_MS)
         await asyncio.sleep_ms(1000)
         motor.direction = COUNTERCLOCKWISE
