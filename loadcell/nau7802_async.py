@@ -2,6 +2,7 @@ from machine import Pin, SoftI2C
 from time import ticks_ms, ticks_diff
 from array import array
 import uasyncio as asyncio
+import micropython
 
 async def _sleep_ms(ms: int):
     if hasattr(asyncio, "sleep_ms"):
@@ -40,6 +41,14 @@ class NAU7802:
     CAL_IN_PROGRESS = 1
     CAL_FAILURE = 2
 
+    # DRDY interrupt trigger options
+    # Note: NAU7802 DRDY is active-high, so rising edge is the most common trigger choice. 
+    # Falling edge can be used if you want to trigger on the end of DRDY being high (e.g. if you want to do something while DRDY is high). 
+    # Both edges can be used if you want to trigger on any change of DRDY state, but that may result in more interrupts and requires careful handling to avoid double-processing the same sample.
+    DRDY_TRIGGER_RISING = Pin.IRQ_RISING
+    DRDY_TRIGGER_FALLING = Pin.IRQ_FALLING
+    DRDY_TRIGGER_BOTH = Pin.IRQ_RISING | Pin.IRQ_FALLING
+
     def __init__(self, i2c, addr=0x2A, max_samples=1000):
         self.i2c = i2c
         self.addr = addr
@@ -50,6 +59,18 @@ class NAU7802:
         self.zero_deadband = 0.0
         self.init_ok = False
         self.last_error = ""
+        self._drdy_pin = None
+        self._drdy_flag = None
+        self._drdy_irq_count = 0
+        self._drdy_rising_count = 0
+        self._drdy_falling_count = 0
+        self._drdy_schedule_drop_count = 0
+
+        if micropython:
+            try:
+                micropython.alloc_emergency_exception_buf(100)
+            except Exception:
+                pass
 
     # ---------- Low-level register helpers (sync, fast) ----------
     def reg_write(self, reg, data):
@@ -198,6 +219,102 @@ class NAU7802:
                 return True
             await _sleep_ms(poll_ms)
         return False
+
+    # ---------- DRDY interrupt path ----------
+    def _drdy_signal(self, _arg):
+        if self._drdy_flag is None:
+            return
+        try:
+            self._drdy_flag.set()
+        except Exception:
+            pass
+
+    def _drdy_irq_handler(self, _pin):
+        self._drdy_irq_count += 1
+        try:
+            if _pin.value():
+                self._drdy_rising_count += 1
+            else:
+                self._drdy_falling_count += 1
+        except Exception:
+            pass
+
+        if self._drdy_flag is None:
+            return
+
+        if micropython:
+            try:
+                micropython.schedule(self._drdy_signal, 0)
+                return
+            except Exception:
+                self._drdy_schedule_drop_count += 1
+
+        self._drdy_signal(0)
+
+    def setup_drdy_interrupt(self, pin_num, pull_up=True, trigger=DRDY_TRIGGER_RISING, hard=False, prime_on_high=False):
+        self.clear_drdy_interrupt()
+
+        pull_mode = Pin.PULL_UP if pull_up else None
+        self._drdy_pin = Pin(pin_num, Pin.IN, pull_mode)
+        self._drdy_flag = asyncio.ThreadSafeFlag()
+        self._drdy_irq_count = 0
+        self._drdy_rising_count = 0
+        self._drdy_falling_count = 0
+        self._drdy_schedule_drop_count = 0
+
+        try:
+            self._drdy_pin.irq(trigger=trigger, handler=self._drdy_irq_handler, hard=hard)
+        except TypeError:
+            self._drdy_pin.irq(trigger=trigger, handler=self._drdy_irq_handler)
+
+        if prime_on_high:
+            try:
+                if self._drdy_pin.value():
+                    self.get_reading()
+            except OSError:
+                pass
+
+        return self._drdy_pin
+
+    async def wait_for_drdy_interrupt(self, timeout_ms=None):
+        if self._drdy_flag is None:
+            return False
+
+        if timeout_ms is None:
+            await self._drdy_flag.wait()
+            return True
+
+        if hasattr(asyncio, "wait_for_ms"):
+            try:
+                await asyncio.wait_for_ms(self._drdy_flag.wait(), timeout_ms)
+                return True
+            except Exception:
+                return False
+
+        await self._drdy_flag.wait()
+        return True
+
+    def drdy_stats(self):
+        return {
+            "irq_count": self._drdy_irq_count,
+            "rising_count": self._drdy_rising_count,
+            "falling_count": self._drdy_falling_count,
+            "schedule_drops": self._drdy_schedule_drop_count,
+            "pin_state": self._drdy_pin.value() if self._drdy_pin else None,
+        }
+
+    def clear_drdy_interrupt(self):
+        if self._drdy_pin:
+            try:
+                self._drdy_pin.irq(handler=None)
+            except Exception:
+                pass
+        self._drdy_pin = None
+        self._drdy_flag = None
+        self._drdy_irq_count = 0
+        self._drdy_rising_count = 0
+        self._drdy_falling_count = 0
+        self._drdy_schedule_drop_count = 0
 
     def get_reading(self):
         raw_data = self.reg_read(self.ADCO_B2, 3)
