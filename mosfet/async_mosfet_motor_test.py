@@ -8,7 +8,7 @@ from machine import Pin, PWM
 import uasyncio as asyncio
 
 # Configuration
-MOSFET_GATE_PIN = 17  # GPIO pin connected to MOSFET gate
+BJT_GATE_PIN = 4  # GPIO pin connected to BJT gate (adjust as needed)
 PWM_FREQUENCY = 60    # Hz
 RAMP_STEP = 1         # Increase/decrease PWM by 1% per step
 STEP_DELAY_MS = 100   # Delay between steps in milliseconds
@@ -19,13 +19,13 @@ async def ramp_motor():
     Ramp motor speed from 0% to 100% and back down to 0%.
     """
     
-    # Initialize PWM on MOSFET gate pin
-    motor_pwm = PWM(Pin(MOSFET_GATE_PIN))
+    # Initialize PWM on BJT gate pin
+    motor_pwm = PWM(Pin(BJT_GATE_PIN))
     motor_pwm.freq(PWM_FREQUENCY)
     
     print(f"Starting asynchronous motor ramp test")
     print(f"PWM Frequency: {PWM_FREQUENCY}Hz")
-    print(f"MOSFET Gate Pin: GPIO{MOSFET_GATE_PIN}")
+    print(f"BJT Gate Pin: GPIO{BJT_GATE_PIN}")
     
     
     try:

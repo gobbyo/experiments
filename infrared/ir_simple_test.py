@@ -1,7 +1,7 @@
 from machine import Pin
 from utime import sleep_ms
 
-ir=Pin(22,Pin.IN)
+ir=Pin(19,Pin.IN)
 
 prev_value = -1
 sensor_slots = 5
